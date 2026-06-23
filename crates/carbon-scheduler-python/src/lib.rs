@@ -473,8 +473,6 @@ pub struct Tasklet {
     last_kwargs: Option<PyObject>,
     greenlet: Option<PyObject>,
     pending_exception: Option<TaskletException>,
-    blocked_channel: Option<PyObject>,
-    blocked_direction: Option<ChannelBlockDirection>,
     context_manager_getter: Option<PyObject>,
     exception_handler: Option<PyObject>,
     callable_bound: bool,
@@ -520,8 +518,6 @@ impl Tasklet {
             last_kwargs: None,
             greenlet: None,
             pending_exception: None,
-            blocked_channel: None,
-            blocked_direction: None,
             context_manager_getter: None,
             exception_handler: None,
             callable_bound: false,
@@ -980,9 +976,6 @@ impl Tasklet {
         if let Some(pending_exception) = &self.pending_exception {
             pending_exception.traverse(&visit)?;
         }
-        if let Some(channel) = &self.blocked_channel {
-            visit.call(channel)?;
-        }
         if let Some(context_manager_getter) = &self.context_manager_getter {
             visit.call(context_manager_getter)?;
         }
@@ -1000,8 +993,6 @@ impl Tasklet {
         self.last_kwargs = None;
         self.greenlet = None;
         self.pending_exception = None;
-        self.blocked_channel = None;
-        self.blocked_direction = None;
         self.context_manager_getter = None;
         self.exception_handler = None;
         self.callable_bound = false;
@@ -1062,8 +1053,6 @@ impl Tasklet {
         }
         slf.blocked = false;
         slf.scheduled = false;
-        slf.blocked_channel = None;
-        slf.blocked_direction = None;
         if slf.paused {
             bridge_core_pause_tasklet(slf.core_id);
             bridge_core_set_tasklet_block_trap(slf.core_id, slf.block_trap);
@@ -1145,8 +1134,6 @@ impl Tasklet {
             slf.continuation_pending = false;
             slf.kill_pending = false;
             slf.pending_exception = None;
-            slf.blocked_channel = None;
-            slf.blocked_direction = None;
             slf.times_switched_to = 0;
             slf.sync_core_state();
             return Ok(tasklet);
@@ -1176,8 +1163,6 @@ impl Tasklet {
         slf.continuation_pending = false;
         slf.kill_pending = false;
         slf.pending_exception = None;
-        slf.blocked_channel = None;
-        slf.blocked_direction = None;
         slf.alive = slf.paused;
         if slf.paused {
             bridge_core_pause_tasklet(slf.core_id);
@@ -1211,8 +1196,6 @@ impl Tasklet {
         slf.continuation_pending = false;
         slf.kill_pending = false;
         slf.pending_exception = None;
-        slf.blocked_channel = None;
-        slf.blocked_direction = None;
         slf.sync_core_state();
 
         let tasklet = (&slf).into_py(py);
@@ -2467,12 +2450,7 @@ fn send_channel_message(
             }
         }
         channel.blocked_senders.push_back(tasklet.clone_ref(py));
-        mark_tasklet_blocked(
-            py,
-            &tasklet,
-            Some(channel_object.clone_ref(py)),
-            Some(ChannelBlockDirection::Send),
-        );
+        mark_tasklet_blocked(py, &tasklet);
         channel.assert_core_mirror()?;
         drop(channel);
         if yield_current_greenlet(py)? {
@@ -2659,12 +2637,7 @@ fn receive_channel_message(py: Python<'_>, channel_object: PyObject) -> PyResult
             }
         }
         channel.blocked_receivers.push_back(tasklet.clone_ref(py));
-        mark_tasklet_blocked(
-            py,
-            &tasklet,
-            Some(channel_object.clone_ref(py)),
-            Some(ChannelBlockDirection::Receive),
-        );
+        mark_tasklet_blocked(py, &tasklet);
         channel.assert_core_mirror()?;
         drop(channel);
         if !yield_current_greenlet(py)? {
@@ -2861,22 +2834,30 @@ fn throw_exception_into_tasklet(
         .map_err(|_| PyTypeError::new_err("expected scheduler.tasklet"))?;
     let tasklet_ptr = tasklet.as_ptr();
     let tasklet_exit = exception.is_tasklet_exit(py);
-    let (blocked_channel, blocked_direction, alive, blocked, scheduled) = {
+    let (alive, blocked, scheduled, blocked_channel) = {
         let tasklet = tasklet.try_borrow()?;
         if !tasklet.belongs_to_current_thread() {
             return Err(PyRuntimeError::new_err(
                 "Failed to throw tasklet: Cannot throw tasklet from another thread",
             ));
         }
+        let snapshot = tasklet.core_snapshot()?;
+        let blocked_channel = snapshot
+            .blocked_on
+            .map(
+                |blocked_on| -> PyResult<(PyObject, ChannelBlockDirection)> {
+                    Ok((
+                        channel_object_by_core_id(py, blocked_on.channel)?,
+                        channel_block_direction(blocked_on.direction),
+                    ))
+                },
+            )
+            .transpose()?;
         (
-            tasklet
-                .blocked_channel
-                .as_ref()
-                .map(|channel| channel.clone_ref(py)),
-            tasklet.blocked_direction,
-            tasklet.alive,
-            tasklet.blocked,
-            tasklet.scheduled,
+            snapshot.alive,
+            snapshot.blocked_on.is_some(),
+            snapshot.scheduled,
+            blocked_channel,
         )
     };
 
@@ -2890,25 +2871,27 @@ fn throw_exception_into_tasklet(
         ));
     }
 
-    if blocked && matches!(blocked_direction, Some(ChannelBlockDirection::Receive)) {
-        if let Some(channel) = blocked_channel.as_ref() {
-            inject_channel_exception_for_blocked_receiver(
-                py,
-                channel.clone_ref(py),
-                tasklet_object.clone_ref(py),
-                tasklet_ptr,
-                exception.into_channel_message(),
-                pending,
-            )?;
-            if pending {
-                return Ok(());
+    if blocked {
+        if let Some((channel, direction)) = blocked_channel.as_ref() {
+            if *direction == ChannelBlockDirection::Receive {
+                inject_channel_exception_for_blocked_receiver(
+                    py,
+                    channel.clone_ref(py),
+                    tasklet_object.clone_ref(py),
+                    tasklet_ptr,
+                    exception.into_channel_message(),
+                    pending,
+                )?;
+                if pending {
+                    return Ok(());
+                }
+                return execute_tasklet_object(py, &tasklet_object);
             }
-            return execute_tasklet_object(py, &tasklet_object);
         }
     }
     if blocked {
-        if let Some(channel) = blocked_channel {
-            remove_tasklet_from_blocked_channel(py, channel, tasklet_ptr, blocked_direction)?;
+        if let Some((channel, direction)) = blocked_channel {
+            remove_tasklet_from_blocked_channel(py, channel, tasklet_ptr, Some(direction))?;
         }
     }
 
@@ -2920,8 +2903,6 @@ fn throw_exception_into_tasklet(
         tasklet.paused = false;
         tasklet.continuation_pending = false;
         tasklet.kill_pending = false;
-        tasklet.blocked_channel = None;
-        tasklet.blocked_direction = None;
         if !scheduled {
             tasklet.scheduled = true;
             queue_tasklet_core_for_thread(
@@ -3174,6 +3155,42 @@ fn borrowed_any_from_ptr<'py>(
     object: *mut ffi::PyObject,
 ) -> Option<Bound<'py, PyAny>> {
     unsafe { Bound::<PyAny>::from_borrowed_ptr_or_opt(py, object) }
+}
+
+fn channel_object_by_core_id(py: Python<'_>, channel_id: CoreChannelId) -> PyResult<PyObject> {
+    let active_channels = ACTIVE_CHANNEL_OBJECTS
+        .lock()
+        .expect("active channel registry lock poisoned")
+        .clone();
+
+    for object_ptr in active_channels {
+        let Some(object) = borrowed_any_from_ptr(py, object_ptr as *mut ffi::PyObject) else {
+            continue;
+        };
+        let Ok(channel) = object.downcast::<Channel>() else {
+            continue;
+        };
+        let matches_channel = {
+            let Ok(channel) = channel.try_borrow() else {
+                continue;
+            };
+            channel.core_id == Some(channel_id)
+        };
+        if matches_channel {
+            return Ok(object.to_object(py));
+        }
+    }
+
+    Err(PyRuntimeError::new_err(
+        "scheduler core bridge blocked tasklet references a missing channel object",
+    ))
+}
+
+fn channel_block_direction(direction: CoreChannelDirection) -> ChannelBlockDirection {
+    match direction {
+        CoreChannelDirection::Send => ChannelBlockDirection::Send,
+        CoreChannelDirection::Receive => ChannelBlockDirection::Receive,
+    }
 }
 
 fn ensure_thread_cleanup(py: Python<'_>) -> PyResult<()> {
@@ -4138,12 +4155,7 @@ fn set_tasklet_paused(py: Python<'_>, tasklet_object: &PyObject, paused: bool) {
     }
 }
 
-fn mark_tasklet_blocked(
-    py: Python<'_>,
-    tasklet_object: &PyObject,
-    channel: Option<PyObject>,
-    direction: Option<ChannelBlockDirection>,
-) {
+fn mark_tasklet_blocked(py: Python<'_>, tasklet_object: &PyObject) {
     if let Ok(tasklet) = tasklet_object.bind(py).downcast::<Tasklet>() {
         if let Ok(mut tasklet) = tasklet.try_borrow_mut() {
             tasklet.alive = true;
@@ -4153,8 +4165,6 @@ fn mark_tasklet_blocked(
             tasklet.continuation_pending = false;
             tasklet.kill_pending = false;
             tasklet.pending_exception = None;
-            tasklet.blocked_channel = channel;
-            tasklet.blocked_direction = direction;
             tasklet.skip_next_channel_callback = false;
         }
     }
@@ -4174,8 +4184,6 @@ fn prepare_tasklet_for_channel_continuation(
             tasklet.continuation_pending = true;
             tasklet.kill_pending = false;
             tasklet.pending_exception = None;
-            tasklet.blocked_channel = None;
-            tasklet.blocked_direction = None;
             tasklet.skip_next_channel_callback = false;
         }
     }
@@ -4204,8 +4212,6 @@ fn prepare_tasklet_for_channel_replay(py: Python<'_>, tasklet_object: &PyObject,
             tasklet.continuation_pending = false;
             tasklet.kill_pending = false;
             tasklet.pending_exception = None;
-            tasklet.blocked_channel = None;
-            tasklet.blocked_direction = None;
             tasklet.skip_next_channel_callback = true;
         }
     }
@@ -4263,8 +4269,6 @@ fn queue_current_tasklet_after_channel_handoff(py: Python<'_>) -> PyResult<bool>
         tasklet.continuation_pending = true;
         tasklet.kill_pending = false;
         tasklet.pending_exception = None;
-        tasklet.blocked_channel = None;
-        tasklet.blocked_direction = None;
     }
     queue_tasklet_for_owner(py, &current)?;
     Ok(true)
@@ -4280,8 +4284,6 @@ fn mark_tasklet_paused(py: Python<'_>, tasklet_object: &PyObject) {
             tasklet.continuation_pending = true;
             tasklet.kill_pending = false;
             tasklet.pending_exception = None;
-            tasklet.blocked_channel = None;
-            tasklet.blocked_direction = None;
             tasklet.skip_next_channel_callback = false;
             tasklet.sync_core_state();
         }
@@ -4303,8 +4305,6 @@ fn mark_tasklet_cleared_from_channel(py: Python<'_>, tasklet_object: &PyObject) 
             tasklet.kill_pending = false;
             tasklet.greenlet = None;
             tasklet.pending_exception = None;
-            tasklet.blocked_channel = None;
-            tasklet.blocked_direction = None;
             tasklet.skip_next_channel_callback = false;
             tasklet.sync_core_state();
         }
@@ -4336,8 +4336,6 @@ fn deliver_tasklet_exit_to_blocked_tasklet(py: Python<'_>, tasklet_object: &PyOb
                     tasklet.continuation_pending = false;
                     tasklet.kill_pending = false;
                     tasklet.pending_exception = None;
-                    tasklet.blocked_channel = None;
-                    tasklet.blocked_direction = None;
                     tasklet.sync_core_state();
                 }
             }
@@ -4439,8 +4437,6 @@ fn enqueue_tasklet_object(
         tasklet.continuation_pending = false;
         tasklet.kill_pending = false;
         tasklet.pending_exception = None;
-        tasklet.blocked_channel = None;
-        tasklet.blocked_direction = None;
         tasklet.sync_core_state();
     }
 
@@ -4776,8 +4772,6 @@ fn execute_tasklet_object(py: Python<'_>, tasklet_object: &PyObject) -> PyResult
                 tasklet.paused = false;
                 tasklet.continuation_pending = false;
                 tasklet.kill_pending = false;
-                tasklet.blocked_channel = None;
-                tasklet.blocked_direction = None;
                 tasklet.sync_core_state();
                 if is_tasklet_exit {
                     return Ok(());
@@ -4791,8 +4785,6 @@ fn execute_tasklet_object(py: Python<'_>, tasklet_object: &PyObject) -> PyResult
         tasklet.paused = false;
         tasklet.continuation_pending = false;
         tasklet.kill_pending = false;
-        tasklet.blocked_channel = None;
-        tasklet.blocked_direction = None;
         tasklet.times_switched_to += 1;
         tasklet.start_time = monotonic_count();
         tasklet.end_time = 0;
@@ -4903,8 +4895,6 @@ fn mark_tasklet_finished_at(py: Python<'_>, tasklet_object: &PyObject, end_time:
             tasklet.continuation_pending = false;
             tasklet.kill_pending = false;
             tasklet.pending_exception = None;
-            tasklet.blocked_channel = None;
-            tasklet.blocked_direction = None;
             tasklet.sync_core_state();
         }
     }
