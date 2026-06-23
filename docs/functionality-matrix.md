@@ -223,9 +223,12 @@ benchmark helper selects the local `legacy_resources_release` binaries when
 available, so the resource rows are eligible for optimized-baseline speedup
 claims while broader report gates still apply.
 The IO workload evidence now also records release-native native CPU context and
-validates the timing-free `fixtures/io` semantic trace corpus, but it remains a
-Python stdlib baseline vs Rust scheduler bridge observation until a captured
-legacy Carbon IO semantic trace comparison exists.
+validates the timing-free `fixtures/io` semantic trace corpus. `io-workloads`
+can import captured normalized legacy-vs-Rust Carbon IO trace artifacts through
+`CARBON_LEGACY_CARBONIO_TRACE_JSON` and `CARBON_RUST_CARBONIO_TRACE_JSON`,
+hash the timing-free event streams, and record zero-mismatch pass/fail evidence.
+It remains a Python stdlib baseline vs Rust scheduler bridge observation until
+those imported artifacts come from a supported legacy Carbon IO run.
 
 Speedup language is gated separately from semantic parity: report rows can show
 debug or non-native observed ratios, but a speedup claim requires a comparable

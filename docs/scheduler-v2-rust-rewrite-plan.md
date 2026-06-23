@@ -239,7 +239,7 @@ is the shortest path from the current progress report to the final HTML report.
 | Scheduler semantic fixtures | `scheduler-fixtures.json` passes 56/56 fixtures, including limited `run_n_tasklets(1)` schedule-order fixtures, invalid direct tasklet run/switch no-mutation coverage, `scheduler.schedule` BACK requeue ordering, FRONT_PLUS_ONE targeted-run boundary trace expectations, switch-trap trapped-operation counts with zero mutating schedule/schedule_remove events, and fixture-level blocked-channel teardown cleanup, `report_ready=true` | Closed for the current deterministic core fixture gate | Keep this gate green while core ownership moves out of the Python bridge; add new fixtures when ownership changes touch tasklet, channel, timeout, switch-trap, or cleanup semantics. |
 | Legacy scheduler baseline | `legacy-scheduler.json` passes `cargo run -p xtask -- legacy-scheduler native-linux` on this host with `210` Python tests, `7` skips, and `36/36` C API CTest cases, `report_ready=true` | Closed for this host | Keep this gate green before publishing scheduler comparison evidence. |
 | Rust scheduler Python/C API | `rust-scheduler-python.json` passes, `core_ownership_status.status=partial` | Python payload handoff, queue identity adapters, remaining lifecycle decisions, callbacks, refcount/GC, and in-process C API coverage are not final | Make `CoreScheduler` snapshots authoritative for the remaining lifecycle/channel decisions while PyO3 holds only compatibility payloads; keep unchanged Python tests and C API source slices green. |
-| Realistic IO workloads | `io-workloads.json` passes loopback and fixture-only traces | No captured legacy `carbonio`/`_socket`/`_ssl` semantic trace comparison | Capture or import supported-platform legacy Carbon IO traces and compare normalized wake/send/throw events against the Rust bridge. |
+| Realistic IO workloads | `io-workloads.json` passes loopback and fixture-only traces; `io-workloads` can now import timing-free normalized trace artifacts from `CARBON_LEGACY_CARBONIO_TRACE_JSON` and `CARBON_RUST_CARBONIO_TRACE_JSON` | No captured legacy `carbonio`/`_socket`/`_ssl` semantic trace comparison from supported-platform artifacts | Capture or import supported-platform legacy Carbon IO traces and compare normalized wake/send/throw events against the Rust bridge until `legacy_carbonio_trace_status=pass`. |
 | Scheduler benchmark comparability | `scheduler-comparison.json` has matched legacy C++ scheduler vs Rust scheduler bridge pressure rows with semantic checksums, throughput, p99/p99.9, CPU p95, peak RSS p95, and throughput CV | Real game-environment validation is still not captured | Use the lab rows for clearly labeled scheduler comparison, then add a real game trace or harness before production scheduler claims. |
 | Final report | `report-progress` writes HTML; `report` exits `1` | Multiple evidence files have `report_ready=false` | Every feature/performance claim in the final report links to passing, report-ready evidence. |
 
@@ -1799,7 +1799,11 @@ Exit gate:
    `rust-scheduler-python.json` can move from `core_ownership_status=partial` to
    complete for the claimed surface.
 4. Capture or import normalized legacy Carbon IO traces for `carbonio`,
-   `_socket`, and `_ssl`, then compare them against the Rust bridge traces.
+   `_socket`, and `_ssl`, then rerun `cargo run --profile release-native -p
+   xtask -- io-workloads` with `CARBON_LEGACY_CARBONIO_TRACE_JSON` and
+   `CARBON_RUST_CARBONIO_TRACE_JSON` set. The evidence must record
+   `legacy_carbonio_trace_status=pass` and zero mismatches before Carbon IO
+   parity is claimable.
 5. Keep `scheduler-comparison.json` green as the matched legacy scheduler vs
    Rust scheduler bridge pressure benchmark; use it for lab comparison only
    until a real game-environment workload is captured.

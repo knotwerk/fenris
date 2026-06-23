@@ -34,6 +34,7 @@ use std::process::{Command, Output};
 use std::time::Instant;
 
 const EVIDENCE_DIR: &str = "target/carbon/evidence";
+const LEGACY_CARBONIO_TRACE_SCOPE: &str = "normalized semantic events for carbonio/_socket/_ssl module patching, socketpair creation, recv block, send wake, dispatch wake, recv result, block_trap send error, close wakeup, and SSL handshake/read/write; timings are intentionally excluded";
 const RUST_SCHEDULER_UNCHANGED_LEGACY_SUBSET: &[&str] = &[
     "test_scheduler.TestCAPIExposure.test_has_capi_attribute",
     "test_tasklet.TestTasklets.test_run",
@@ -2521,7 +2522,45 @@ fn io_workloads() -> Result<()> {
         target_cpu_native,
         debug_assertions,
     );
-    let legacy_carbonio_semantic_traces = legacy_carbonio_semantic_trace_blocker();
+    let legacy_carbonio_semantic_traces = match legacy_carbonio_semantic_trace_evidence() {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            failures.push(json!({
+                "kind": "legacy_carbonio_semantic_trace_import",
+                "implementation": "supplied_artifact",
+                "error": error.to_string()
+            }));
+            json!({
+                "legacy_carbonio_trace_status": "fail",
+                "legacy_carbonio_trace_comparability": "invalid_supplied_trace_artifacts",
+                "legacy_carbonio_trace_scope": LEGACY_CARBONIO_TRACE_SCOPE,
+                "legacy_carbonio_trace_runs": [],
+                "legacy_carbonio_trace_hashes": {
+                    "legacy_carbonio_legacy_scheduler": null,
+                    "legacy_carbonio_rust_scheduler_capsule": null
+                },
+                "legacy_carbonio_trace_comparison": {
+                    "parity_status": "fail",
+                    "mismatch_count": null,
+                    "mismatches": [],
+                    "required_result": "zero normalized semantic mismatches before legacy Carbon IO parity can be claimed"
+                },
+                "error": error.to_string()
+            })
+        }
+    };
+    let legacy_trace_status = legacy_carbonio_semantic_traces
+        .get("legacy_carbonio_trace_status")
+        .and_then(Value::as_str);
+    if legacy_trace_status == Some("fail") {
+        failures.push(json!({
+            "kind": "legacy_carbonio_semantic_trace_comparison",
+            "implementation": "supplied_artifacts",
+            "error": "supplied legacy carbonio semantic traces did not match"
+        }));
+    }
+    let remaining_before_report_ready =
+        io_workload_remaining_before_report_ready(&legacy_carbonio_semantic_traces);
     let status = if failures.is_empty() && comparisons.len() == 2 {
         "pass"
     } else {
@@ -2544,7 +2583,7 @@ fn io_workloads() -> Result<()> {
         "io_process_sample_count": io_process_sample_count,
         "coverage": "initial_loopback_socket_ssl_workloads_with_scheduler_bridge_resource_stats_io_semantic_trace_fixtures_and_io_scheduler_h_channel_semantic_smoke",
         "comparability": "same_python_loopback_baseline_vs_rust_scheduler_bridge_not_legacy_carbon_io",
-        "not_report_ready_reason": "Loopback TCP and TLS workloads now collect realistic request latency, throughput, CPU, and RSS for a Python baseline and the Rust scheduler Python bridge. fixtures/io now contains a bounded normalized semantic trace corpus for socket recv/send wakeups, SSL read/write wakeups, and SSL send_throw error propagation; xtask validates that fixture vocabulary/order and records it as fixture-only evidence. A compiled Scheduler.h consumer also proves the Rust scheduler capsule supports IO-facing PyChannel_GetBalance blocked-receiver wake decisions and PyChannel_SendThrow error propagation. This is not final Carbon IO parity: a normalized legacy carbonio/_socket/_ssl semantic trace comparison is tracked but blocked on a supported Windows/macOS legacy carbonio+legacy scheduler run or prebuilt legacy artifacts.",
+        "not_report_ready_reason": "Loopback TCP and TLS workloads now collect realistic request latency, throughput, CPU, and RSS for a Python baseline and the Rust scheduler Python bridge. fixtures/io now contains a bounded normalized semantic trace corpus for socket recv/send wakeups, SSL read/write wakeups, and SSL send_throw error propagation; xtask validates that fixture vocabulary/order and records it as fixture-only evidence. A compiled Scheduler.h consumer also proves the Rust scheduler capsule supports IO-facing PyChannel_GetBalance blocked-receiver wake decisions and PyChannel_SendThrow error propagation. This is not final Carbon IO parity unless CARBON_LEGACY_CARBONIO_TRACE_JSON and CARBON_RUST_CARBONIO_TRACE_JSON point at captured normalized legacy carbonio/_socket/_ssl trace artifacts and the imported comparison records zero mismatches.",
         "command": command,
         "package_directory": package_dir
             .as_ref()
@@ -2580,14 +2619,7 @@ fn io_workloads() -> Result<()> {
             "PyChannel_Send wakes a blocked receiver through the Rust scheduler capsule",
             "PyChannel_SendThrow propagates a RuntimeError through a blocked receiver tasklet"
         ],
-        "remaining_before_report_ready": [
-            "run the normalized legacy carbonio/_socket/_ssl semantic trace harness on a supported Windows/macOS legacy carbonio+legacy scheduler build or supplied prebuilt legacy artifacts",
-            "replace fixture-only expected traces with captured legacy carbonio/_socket/_ssl traces and compare them against Rust scheduler capsule traces",
-            "compare zero-mismatch semantic traces for libuv wakeups and blocked tasklets against the Rust scheduler capsule",
-            "expand c_channel compatibility beyond the initial Scheduler.h channel wake/send_throw smoke",
-            "prove SSL error propagation through the real carbonengine/io extension path",
-            "add larger Tier 2 loopback/container workloads after Tier 1 parity is green"
-        ],
+        "remaining_before_report_ready": remaining_before_report_ready,
         "build_stdout_tail": tail_lines(&build_stdout, 12),
         "build_stderr_tail": tail_lines(&build_stderr, 12),
         "failures": failures
@@ -3136,11 +3168,374 @@ fn io_workload_comparisons(
         .collect()
 }
 
+fn legacy_carbonio_semantic_trace_evidence() -> Result<Value> {
+    let legacy_path = env::var_os("CARBON_LEGACY_CARBONIO_TRACE_JSON").map(PathBuf::from);
+    let rust_path = env::var_os("CARBON_RUST_CARBONIO_TRACE_JSON").map(PathBuf::from);
+
+    match (legacy_path, rust_path) {
+        (None, None) => Ok(legacy_carbonio_semantic_trace_blocker()),
+        (Some(legacy_path), Some(rust_path)) => {
+            let legacy_trace = load_normalized_carbonio_trace_artifact(
+                &legacy_path,
+                "legacy_carbonio_legacy_scheduler",
+            )?;
+            let rust_trace = load_normalized_carbonio_trace_artifact(
+                &rust_path,
+                "legacy_carbonio_rust_scheduler_capsule",
+            )?;
+            Ok(compare_normalized_carbonio_traces(
+                &legacy_trace,
+                &rust_trace,
+            ))
+        }
+        (legacy_path, rust_path) => bail!(
+            "Carbon IO trace import requires both CARBON_LEGACY_CARBONIO_TRACE_JSON and CARBON_RUST_CARBONIO_TRACE_JSON; got legacy={}, rust={}",
+            legacy_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| String::from("missing")),
+            rust_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| String::from("missing"))
+        ),
+    }
+}
+
+#[derive(Clone, Debug)]
+struct NormalizedCarbonioTrace {
+    role: String,
+    path: PathBuf,
+    trace_id: Option<String>,
+    implementation: Option<String>,
+    kind_counts: BTreeMap<String, u64>,
+    events: Vec<Value>,
+    event_hash: String,
+}
+
+fn load_normalized_carbonio_trace_artifact(
+    path: &Path,
+    role: &str,
+) -> Result<NormalizedCarbonioTrace> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("reading normalized Carbon IO trace {}", path.display()))?;
+    let value = serde_json::from_str::<Value>(&text)
+        .with_context(|| format!("parsing normalized Carbon IO trace {}", path.display()))?;
+    normalized_carbonio_trace_from_value(path, role, &value)
+}
+
+fn normalized_carbonio_trace_from_value(
+    path: &Path,
+    role: &str,
+    value: &Value,
+) -> Result<NormalizedCarbonioTrace> {
+    let (events_value, trace_id, implementation) = match value {
+        Value::Array(events) => (events, None, None),
+        Value::Object(object) => {
+            let schema = object.get("schema").and_then(Value::as_str);
+            if let Some(schema) = schema {
+                if !matches!(
+                    schema,
+                    "carbon.io.normalized_trace.v1" | "carbon.io.semantic_trace.v1"
+                ) {
+                    bail!(
+                        "normalized Carbon IO trace {} has unsupported schema {}",
+                        path.display(),
+                        schema
+                    );
+                }
+            }
+            let events = object
+                .get("normalized_events")
+                .or_else(|| object.get("events"))
+                .and_then(Value::as_array)
+                .filter(|events| !events.is_empty())
+                .with_context(|| {
+                    format!(
+                        "normalized Carbon IO trace {} must contain non-empty events or normalized_events",
+                        path.display()
+                    )
+                })?;
+            (
+                events,
+                object
+                    .get("trace_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                object
+                    .get("implementation")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            )
+        }
+        _ => bail!(
+            "normalized Carbon IO trace {} must be an event array or object",
+            path.display()
+        ),
+    };
+
+    let mut events = Vec::with_capacity(events_value.len());
+    let mut kind_counts = BTreeMap::<String, u64>::new();
+    for (index, event) in events_value.iter().enumerate() {
+        let object = event.as_object().with_context(|| {
+            format!(
+                "normalized Carbon IO trace {} event[{}] must be an object",
+                path.display(),
+                index
+            )
+        })?;
+        for timing_field in [
+            "timestamp",
+            "timestamp_us",
+            "time_us",
+            "duration_us",
+            "elapsed_us",
+        ] {
+            if object.contains_key(timing_field) {
+                bail!(
+                    "normalized Carbon IO trace {} event[{}] contains timing field {}; imported semantic traces must be timing-free",
+                    path.display(),
+                    index,
+                    timing_field
+                );
+            }
+        }
+        let event_name = event
+            .get("event")
+            .and_then(Value::as_str)
+            .filter(|event| !event.trim().is_empty())
+            .with_context(|| {
+                format!(
+                    "normalized Carbon IO trace {} event[{}].event must be a non-empty string",
+                    path.display(),
+                    index
+                )
+            })?;
+        let kind = event_name
+            .split('.')
+            .next()
+            .unwrap_or(event_name)
+            .to_string();
+        *kind_counts.entry(kind).or_default() += 1;
+        events.push(event.clone());
+    }
+
+    let event_hash = md5_hex(&serde_json::to_vec(&events).with_context(|| {
+        format!(
+            "serializing normalized Carbon IO trace events from {}",
+            path.display()
+        )
+    })?);
+
+    Ok(NormalizedCarbonioTrace {
+        role: role.to_string(),
+        path: path.to_path_buf(),
+        trace_id,
+        implementation,
+        kind_counts,
+        events,
+        event_hash,
+    })
+}
+
+fn compare_normalized_carbonio_traces(
+    legacy_trace: &NormalizedCarbonioTrace,
+    rust_trace: &NormalizedCarbonioTrace,
+) -> Value {
+    let mismatches = normalized_trace_mismatches(&legacy_trace.events, &rust_trace.events, 20);
+    let pair_mismatch_count = legacy_trace
+        .events
+        .iter()
+        .zip(rust_trace.events.iter())
+        .filter(|(legacy_event, rust_event)| legacy_event != rust_event)
+        .count() as u64;
+    let mismatch_count =
+        pair_mismatch_count + legacy_trace.events.len().abs_diff(rust_trace.events.len()) as u64;
+    let parity_status = if mismatch_count == 0 { "pass" } else { "fail" };
+    let trace_status = if mismatch_count == 0 { "pass" } else { "fail" };
+    let required_event_coverage = legacy_carbonio_required_event_coverage(&legacy_trace.events);
+
+    json!({
+        "legacy_carbonio_trace_status": trace_status,
+        "legacy_carbonio_trace_comparability": "comparable_imported_normalized_legacy_carbonio_traces",
+        "legacy_carbonio_trace_scope": LEGACY_CARBONIO_TRACE_SCOPE,
+        "legacy_carbonio_trace_runs": [
+            normalized_carbonio_trace_summary(legacy_trace),
+            normalized_carbonio_trace_summary(rust_trace)
+        ],
+        "legacy_carbonio_trace_hashes": {
+            "legacy_carbonio_legacy_scheduler": legacy_trace.event_hash.clone(),
+            "legacy_carbonio_rust_scheduler_capsule": rust_trace.event_hash.clone()
+        },
+        "legacy_carbonio_trace_comparison": {
+            "parity_status": parity_status,
+            "mismatch_count": mismatch_count,
+            "event_count_legacy": legacy_trace.events.len(),
+            "event_count_rust": rust_trace.events.len(),
+            "mismatches": mismatches,
+            "required_result": "zero normalized semantic mismatches before legacy Carbon IO parity can be claimed"
+        },
+        "legacy_carbonio_required_event_coverage": required_event_coverage,
+        "legacy_carbonio_build": {
+            "host_os": env::consts::OS,
+            "status": "imported_trace_artifacts",
+            "artifact_source": "CARBON_LEGACY_CARBONIO_TRACE_JSON and CARBON_RUST_CARBONIO_TRACE_JSON",
+            "blocked_reason": null
+        },
+        "planned_trace_cases": [
+            "socketpair recv blocks then send wakes receiver through carbonio dispatch",
+            "blocking send under block_trap raises the legacy visible error",
+            "incremental socket reads preserve event order and payload bytes",
+            "close wakes pending recv with the legacy visible close/error event",
+            "SSL handshake/read/write wake paths preserve normalized success/error events"
+        ]
+    })
+}
+
+fn legacy_carbonio_required_trace_events() -> Vec<&'static str> {
+    vec![
+        "socketpair.create",
+        "socket.recv.block",
+        "socket.send",
+        "io.callback.readable",
+        "socket.recv.result",
+        "channel.send_throw",
+        "channel.receive.error",
+        "ssl.handshake.start",
+        "ssl.handshake.complete",
+        "ssl.read.block",
+        "ssl.write",
+        "io.callback.ssl_readable",
+        "ssl.read.result",
+    ]
+}
+
+fn legacy_carbonio_required_event_coverage(events: &[Value]) -> Value {
+    let present = events
+        .iter()
+        .filter_map(|event| event.get("event").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let required_events = legacy_carbonio_required_trace_events();
+    let missing_events = required_events
+        .iter()
+        .filter(|event| !present.contains(**event))
+        .copied()
+        .collect::<Vec<_>>();
+    let required_event_count = required_events.len();
+    let missing_event_count = missing_events.len();
+    json!({
+        "status": if missing_events.is_empty() { "pass" } else { "partial" },
+        "required_events": required_events,
+        "missing_events": missing_events,
+        "required_event_count": required_event_count,
+        "missing_event_count": missing_event_count
+    })
+}
+
+fn io_workload_remaining_before_report_ready(
+    legacy_carbonio_semantic_traces: &Value,
+) -> Vec<String> {
+    let mut remaining = Vec::new();
+    match legacy_carbonio_semantic_traces
+        .get("legacy_carbonio_trace_status")
+        .and_then(Value::as_str)
+    {
+        Some("pass") => {
+            let missing_events = legacy_carbonio_semantic_traces
+                .pointer("/legacy_carbonio_required_event_coverage/missing_events")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if !missing_events.is_empty() {
+                let missing = missing_events
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .take(8)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                remaining.push(format!(
+                    "expand imported Carbon IO traces to cover missing required normalized events: {missing}"
+                ));
+            }
+        }
+        Some("fail") => {
+            remaining.push(String::from(
+                "fix supplied normalized legacy-vs-Rust Carbon IO trace mismatches until legacy_carbonio_trace_status=pass",
+            ));
+        }
+        _ => {
+            remaining.push(String::from(
+                "run the normalized legacy carbonio/_socket/_ssl semantic trace harness on a supported Windows/macOS legacy carbonio+legacy scheduler build or supplied prebuilt legacy artifacts",
+            ));
+            remaining.push(String::from(
+                "set CARBON_LEGACY_CARBONIO_TRACE_JSON and CARBON_RUST_CARBONIO_TRACE_JSON to captured normalized traces and rerun io-workloads until legacy_carbonio_trace_status=pass",
+            ));
+            remaining.push(String::from(
+                "compare zero-mismatch semantic traces for libuv wakeups and blocked tasklets against the Rust scheduler capsule",
+            ));
+        }
+    }
+    remaining.extend([
+        String::from("expand c_channel compatibility beyond the initial Scheduler.h channel wake/send_throw smoke"),
+        String::from("prove SSL error propagation through the real carbonengine/io extension path"),
+        String::from("add larger Tier 2 loopback/container workloads after Tier 1 parity is green"),
+    ]);
+    remaining
+}
+
+fn normalized_trace_mismatches(legacy: &[Value], rust: &[Value], limit: usize) -> Vec<Value> {
+    let mut mismatches = Vec::new();
+    let pair_count = legacy.len().min(rust.len());
+    for index in 0..pair_count {
+        if legacy[index] != rust[index] {
+            mismatches.push(json!({
+                "index": index,
+                "legacy_event": legacy[index],
+                "rust_event": rust[index]
+            }));
+            if mismatches.len() >= limit {
+                return mismatches;
+            }
+        }
+    }
+    if legacy.len() != rust.len() && mismatches.len() < limit {
+        mismatches.push(json!({
+            "index": pair_count,
+            "legacy_event": legacy.get(pair_count).cloned().unwrap_or(Value::Null),
+            "rust_event": rust.get(pair_count).cloned().unwrap_or(Value::Null),
+            "length_mismatch": {
+                "legacy_event_count": legacy.len(),
+                "rust_event_count": rust.len()
+            }
+        }));
+    }
+    mismatches
+}
+
+fn normalized_carbonio_trace_summary(trace: &NormalizedCarbonioTrace) -> Value {
+    json!({
+        "role": trace.role.clone(),
+        "path": trace.path.display().to_string(),
+        "trace_id": trace.trace_id.clone(),
+        "implementation": trace.implementation.clone(),
+        "event_count": trace.events.len(),
+        "event_hash": trace.event_hash.clone(),
+        "kind_counts": trace.kind_counts.clone(),
+        "first_event": trace.events.first().and_then(|event| event.get("event")).and_then(Value::as_str).unwrap_or_default(),
+        "last_event": trace.events.last().and_then(|event| event.get("event")).and_then(Value::as_str).unwrap_or_default(),
+        "timings_excluded": true
+    })
+}
+
 fn legacy_carbonio_semantic_trace_blocker() -> Value {
     json!({
         "legacy_carbonio_trace_status": "blocked",
         "legacy_carbonio_trace_comparability": "not_comparable_legacy_carbonio_unavailable_on_this_host",
-        "legacy_carbonio_trace_scope": "normalized semantic events for carbonio/_socket/_ssl module patching, socketpair creation, recv block, send wake, dispatch wake, recv result, block_trap send error, close wakeup, and SSL handshake/read/write; timings are intentionally excluded",
+        "legacy_carbonio_trace_scope": LEGACY_CARBONIO_TRACE_SCOPE,
+        "trace_import_env": {
+            "legacy": "CARBON_LEGACY_CARBONIO_TRACE_JSON",
+            "rust": "CARBON_RUST_CARBONIO_TRACE_JSON"
+        },
         "legacy_carbonio_trace_runs": [],
         "legacy_carbonio_trace_hashes": {
             "legacy_carbonio_legacy_scheduler": null,
@@ -19620,6 +20015,123 @@ mod tests {
                 .expect_err("timing fields must be rejected");
 
         assert!(error.to_string().contains("duration_us"));
+    }
+
+    #[test]
+    fn imported_carbonio_trace_comparison_passes_for_identical_events() {
+        let trace = json!({
+            "schema": "carbon.io.normalized_trace.v1",
+            "trace_id": "socketpair_recv_send_wake",
+            "implementation": "legacy_carbonio_legacy_scheduler",
+            "events": [
+                {"event": "socketpair.create", "actor": "main"},
+                {"event": "socket.recv.block", "tasklet": "receiver"},
+                {"event": "socket.send", "bytes": 7},
+                {"event": "socket.recv.result", "bytes": 7}
+            ]
+        });
+        let legacy = normalized_carbonio_trace_from_value(
+            Path::new("legacy-carbonio-trace.json"),
+            "legacy_carbonio_legacy_scheduler",
+            &trace,
+        )
+        .expect("legacy trace should parse");
+        let rust = normalized_carbonio_trace_from_value(
+            Path::new("rust-carbonio-trace.json"),
+            "legacy_carbonio_rust_scheduler_capsule",
+            &trace,
+        )
+        .expect("rust trace should parse");
+
+        let evidence = compare_normalized_carbonio_traces(&legacy, &rust);
+
+        assert_eq!(
+            evidence
+                .get("legacy_carbonio_trace_status")
+                .and_then(Value::as_str),
+            Some("pass")
+        );
+        assert_eq!(
+            evidence
+                .pointer("/legacy_carbonio_trace_comparison/mismatch_count")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            evidence
+                .pointer("/legacy_carbonio_trace_runs/0/first_event")
+                .and_then(Value::as_str),
+            Some("socketpair.create")
+        );
+        assert_eq!(
+            evidence.pointer("/legacy_carbonio_trace_hashes/legacy_carbonio_legacy_scheduler"),
+            evidence
+                .pointer("/legacy_carbonio_trace_hashes/legacy_carbonio_rust_scheduler_capsule")
+        );
+    }
+
+    #[test]
+    fn imported_carbonio_trace_comparison_reports_mismatches() {
+        let legacy_trace = json!([
+            {"event": "socket.recv.block", "tasklet": "receiver"},
+            {"event": "socket.recv.result", "bytes": 7}
+        ]);
+        let rust_trace = json!([
+            {"event": "socket.recv.block", "tasklet": "receiver"},
+            {"event": "socket.recv.result", "bytes": 6}
+        ]);
+        let legacy = normalized_carbonio_trace_from_value(
+            Path::new("legacy-carbonio-trace.json"),
+            "legacy_carbonio_legacy_scheduler",
+            &legacy_trace,
+        )
+        .expect("legacy trace should parse");
+        let rust = normalized_carbonio_trace_from_value(
+            Path::new("rust-carbonio-trace.json"),
+            "legacy_carbonio_rust_scheduler_capsule",
+            &rust_trace,
+        )
+        .expect("rust trace should parse");
+
+        let evidence = compare_normalized_carbonio_traces(&legacy, &rust);
+
+        assert_eq!(
+            evidence
+                .get("legacy_carbonio_trace_status")
+                .and_then(Value::as_str),
+            Some("fail")
+        );
+        assert_eq!(
+            evidence
+                .pointer("/legacy_carbonio_trace_comparison/mismatch_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            evidence
+                .pointer("/legacy_carbonio_trace_comparison/mismatches/0/index")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn imported_carbonio_trace_rejects_timing_fields() {
+        let trace = json!({
+            "schema": "carbon.io.normalized_trace.v1",
+            "events": [
+                {"event": "socket.recv.block", "timestamp_us": 42}
+            ]
+        });
+
+        let error = normalized_carbonio_trace_from_value(
+            Path::new("legacy-carbonio-trace.json"),
+            "legacy_carbonio_legacy_scheduler",
+            &trace,
+        )
+        .expect_err("timing fields must be rejected");
+
+        assert!(error.to_string().contains("timestamp_us"));
     }
 
     #[test]
