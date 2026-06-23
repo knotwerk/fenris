@@ -53,15 +53,16 @@ As of 2026-06-23, the scheduler Rust work is no longer just a sketch. The local
 workspace has these useful pieces:
 
 - `carbon-scheduler-core` has a pure Rust scheduler handle layer with tasklet
-  IDs, channel IDs, run queue IDs, runnable queues, channel wait queues, same
-  domain send/receive matching, snapshots, and basic close/clear behavior.
+  IDs, channel IDs, run queue IDs, runnable queues, per-run-queue switch-trap
+  state, channel wait queues, same-domain send/receive matching, snapshots, and
+  basic close/clear behavior.
 - `carbon-scheduler-trace` runs scheduler fixtures and invariant checks.
 - `carbon-scheduler-ffi` has ABI versioning, C capsule layout checks, and panic
   containment.
 - `carbon-scheduler-python` mirrors live Python tasklet/channel operations into
   the Rust core and uses core IDs for selected channel/run-queue ordering paths.
 - The Python bridge test suite is locally green at `54/54` tests.
-- The core/trace/FFI tests are locally green at `11/11`, `3/3`, and `1/1`
+- The core/trace/FFI tests are locally green at `12/12`, `3/3`, and `1/1`
   respectively.
 - `cargo run -p xtask -- rust-scheduler-python` records the PyO3 bridge as a
   compatibility boundary, not the final scheduler architecture.

@@ -567,7 +567,7 @@ def scheduler_gate_rows(items: list[dict]) -> str:
             f"<td>{h(item['status'])}</td>"
             f"<td>{'yes' if item['report_ready'] else 'no'}</td>"
             f"<td>{h(short_text(item['coverage'], 110))}</td>"
-            f"<td>{h('; '.join(blockers))}</td>"
+            f"<td>{h(short_text('; '.join(blockers), 180))}</td>"
             "</tr>"
         )
     return "\n".join(rows)
@@ -635,6 +635,113 @@ def summary_cards(summary: dict, *, subject: str) -> str:
                 "Peak memory",
                 fmt_signed_percent(summary["median_rss_reduction"]),
                 f"median peak RSS; lower in {summary['rss_better']}/{summary['rows']}",
+            ),
+        ]
+    )
+
+
+def semantic_mismatch_count(rows: list[dict]) -> int | None:
+    total = 0
+    seen = False
+    for row in rows:
+        mismatch_count = path_value(row, "/semantic/mismatch_count")
+        amount = number(mismatch_count)
+        if amount is None:
+            continue
+        seen = True
+        total += int(amount)
+    return total if seen else None
+
+
+def top_line_cards(
+    scheduler_summary: dict,
+    resource_summary: dict,
+    scheduler_rows: list[dict],
+) -> str:
+    mismatch_count = semantic_mismatch_count(scheduler_rows)
+    row_count = scheduler_summary["rows"]
+    return "\n".join(
+        [
+            metric_card(
+                "Scheduler parity",
+                f"{fmt_int(row_count)}/{fmt_int(row_count)} rows",
+                f"{fmt_int(mismatch_count)} semantic mismatches in matched lab workloads",
+            ),
+            metric_card(
+                "Scheduler speed",
+                fmt_directional_ratio(scheduler_summary["median_speedup"]),
+                "median old-vs-Rust wall/throughput result today",
+            ),
+            metric_card(
+                "Resources tools",
+                fmt_directional_ratio(resource_summary["median_speedup"]),
+                f"median across {resource_summary['rows']} separate CLI rows",
+            ),
+            metric_card(
+                "Production gate",
+                "open",
+                "real game-environment scheduler workload still required",
+            ),
+        ]
+    )
+
+
+def performance_breakdown_cards(
+    scheduler_summary: dict,
+    resource_summary: dict,
+    scalability_evidence: dict,
+    io_rows_data: list[dict],
+) -> str:
+    pressure_summary = scalability_evidence.get("summary") or {}
+    pressure_rows_count = path_value(pressure_summary, "/family_counts/scheduler", 0)
+    stable_rows = pressure_summary.get("stable_rows_cv_le_10_percent")
+    io_count = len(io_rows_data)
+    return "\n".join(
+        [
+            metric_card(
+                "Scheduler throughput",
+                fmt_directional_ratio(scheduler_summary["median_speedup"]),
+                f"legacy C++ vs Rust bridge; {scheduler_summary['rows']} comparable rows",
+            ),
+            metric_card(
+                "Scheduler p99",
+                fmt_signed_percent(scheduler_summary["median_p99_reduction"]),
+                f"median tail change; lower in {scheduler_summary['p99_better']}/{scheduler_summary['rows']}",
+            ),
+            metric_card(
+                "Scheduler resources",
+                f"{fmt_signed_percent(scheduler_summary['median_cpu_reduction'])} CPU",
+                f"peak memory {fmt_signed_percent(scheduler_summary['median_rss_reduction'])}",
+            ),
+            metric_card(
+                "Pressure shape",
+                fmt_rate(pressure_summary.get("peak_operations_per_sec"), "operations"),
+                f"{fmt_int(stable_rows)}/{fmt_int(pressure_rows_count)} scheduler rows stable at CV <= 10%",
+            ),
+            metric_card(
+                "Worst scheduler p99",
+                fmt_us(pressure_summary.get("worst_latency_p99_us")),
+                f"Rust-only pressure matrix; p99.9 {fmt_us(pressure_summary.get('worst_latency_p99_9_us'))}",
+            ),
+            metric_card(
+                "Pressure memory",
+                fmt_kb(pressure_summary.get("highest_peak_rss_kb_p95")),
+                f"p95 peak RSS across {fmt_int(pressure_rows_count)} scheduler pressure rows",
+            ),
+            metric_card(
+                "Resources throughput",
+                fmt_directional_ratio(resource_summary["median_speedup"]),
+                f"separate resource CLI comparison; {resource_summary['rows']} rows",
+            ),
+            metric_card(
+                "Resources cost",
+                f"{fmt_signed_percent(resource_summary['median_cpu_reduction'])} CPU",
+                f"peak memory {fmt_signed_percent(resource_summary['median_rss_reduction'])}",
+            ),
+            metric_card(
+                "IO loopback",
+                f"{fmt_int(io_count)} rows",
+                "request, byte, CPU, and memory stats; not legacy Carbon IO parity",
             ),
         ]
     )
@@ -945,7 +1052,7 @@ def render(evidence_dir: Path) -> str:
     .hero {
       max-width: 1220px;
       margin: 0 auto;
-      padding: 46px 24px 32px;
+      padding: 34px 24px 28px;
     }
     .eyebrow {
       margin: 0 0 10px;
@@ -957,16 +1064,20 @@ def render(evidence_dir: Path) -> str:
     }
     h1 {
       margin: 0;
-      max-width: 1050px;
-      font-size: clamp(2.2rem, 4.4vw, 4.35rem);
-      line-height: 1.03;
+      max-width: 980px;
+      font-size: clamp(2.05rem, 3.2vw, 3.45rem);
+      line-height: 1.04;
       letter-spacing: 0;
     }
     .lead {
-      max-width: 930px;
-      margin: 18px 0 0;
+      max-width: 880px;
+      margin: 14px 0 0;
       color: var(--muted);
       font-size: 1.08rem;
+    }
+    .hero .metric-grid {
+      margin-top: 20px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
     main {
       max-width: 1220px;
@@ -1025,6 +1136,9 @@ def render(evidence_dir: Path) -> str:
       box-shadow: 0 1px 2px rgba(23, 32, 42, 0.04);
     }
     .metric { padding: 15px; }
+    .metric, .panel, .arch-grid article, .tested-grid article, .callout, .table-wrap {
+      max-width: 100%;
+    }
     .metric span {
       display: block;
       color: var(--muted);
@@ -1085,6 +1199,7 @@ def render(evidence_dir: Path) -> str:
       border-bottom: 1px solid var(--line);
       text-align: left;
       vertical-align: top;
+      overflow-wrap: anywhere;
     }
     th {
       background: var(--wash-strong);
@@ -1132,10 +1247,17 @@ def render(evidence_dir: Path) -> str:
       .takeaways { grid-template-columns: 1fr; }
       .section-head { display: block; }
       .section-head .tag { margin-top: 8px; }
-      h1 { font-size: 2.15rem; }
+      h1 { font-size: 2.05rem; }
+      .hero .metric-grid { grid-template-columns: 1fr 1fr; }
       .metric-grid { grid-template-columns: 1fr 1fr; }
+      table { min-width: 760px; font-size: 0.84rem; }
+      th, td { padding: 8px; }
     }
     @media (max-width: 520px) {
+      .hero { padding: 28px 18px 22px; }
+      h1 { font-size: 1.95rem; }
+      .lead { font-size: 1rem; }
+      .hero .metric-grid,
       .metric-grid { grid-template-columns: 1fr; }
     }
   </style>
@@ -1144,8 +1266,11 @@ def render(evidence_dir: Path) -> str:
   <header>
     <div class="hero">
       <p class="eyebrow">Carbon scheduler rewrite evidence</p>
-      <h1>Measured scheduler parity, current performance, and resource-tool wins.</h1>
-      <p class="lead">The scheduler comparison now runs legacy C++ and the Rust bridge through the same Python tasklet/channel API. The current lab result is honest: semantic parity is green for the measured workloads, but the Rust bridge is not yet faster. Resource tooling is a separate, stronger win and is broken out below.</p>
+      <h1>Carbon scheduler parity is green in the lab; performance work remains.</h1>
+      <p class="lead">This report is scheduler-first. It compares the legacy C++ scheduler extension and the Rust scheduler bridge through the same Python tasklet/channel API, then separates resource-tool wins and IO/pressure evidence so the claims stay clear.</p>
+      <div class="metric-grid">
+        $top_line_cards
+      </div>
     </div>
   </header>
   <main>
@@ -1153,21 +1278,21 @@ def render(evidence_dir: Path) -> str:
       <div>
         <div class="section-head">
           <div>
-            <h2>Executive Snapshot</h2>
-            <p>Use this as the top-line read: what is proven, where performance stands, and what remains before production scheduler claims.</p>
+            <h2>Measured Breakdown</h2>
+            <p>Use this as the stats read: scheduler comparison first, resource wins second, and pressure/IO evidence called out as non-comparable where appropriate.</p>
           </div>
           <span class="tag">Generated $generated</span>
         </div>
         <div class="metric-grid">
-          $scheduler_cards
+          $breakdown_cards
         </div>
       </div>
       <aside class="panel">
         <h2>What Changed</h2>
         <ul>
-          <li>The scheduler path under test keeps the legacy Python API, but routes covered run-queue, tasklet, and channel decisions through Rust-owned scheduler state.</li>
+          <li>The scheduler path under test keeps the legacy Python API, but routes covered run-queue, tasklet, channel, and switch-trap decisions through Rust-owned scheduler state.</li>
           <li>Each matched scheduler row records semantic checksum parity plus throughput, p50/p99 latency, CPU burn, and peak RSS.</li>
-          <li>The next production gate is a real game-environment scheduler workload; the current fake-game row is lab orchestration evidence.</li>
+          <li>The next production gate is a real game-environment scheduler workload; the current fake-game row is lab orchestration evidence, not a production claim.</li>
         </ul>
       </aside>
     </section>
@@ -1370,7 +1495,13 @@ def render(evidence_dir: Path) -> str:
 """
     )
     return page.safe_substitute(
-        scheduler_cards=summary_cards(scheduler_summary, subject="Scheduler"),
+        top_line_cards=top_line_cards(scheduler_summary, resource_summary, rows),
+        breakdown_cards=performance_breakdown_cards(
+            scheduler_summary,
+            resource_summary,
+            scalability_evidence,
+            io_comparison_rows,
+        ),
         resource_cards=summary_cards(resource_summary, subject="Resources"),
         evidence_status_cards=evidence_status_cards(evidence_dir),
         architecture=architecture_section(),

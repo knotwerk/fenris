@@ -399,6 +399,7 @@ struct CoreChannelState {
 #[derive(Debug, Clone, Default)]
 struct CoreRunQueueState {
     runnable: VecDeque<CoreTaskletId>,
+    switch_trap_level: i64,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -456,6 +457,31 @@ impl CoreScheduler {
         self.next_run_queue += 1;
         self.run_queues.insert(id, CoreRunQueueState::default());
         id
+    }
+
+    pub fn switch_trap(
+        &mut self,
+        queue: CoreRunQueueId,
+        delta: i64,
+    ) -> Result<i64, CoreSchedulerHandleError> {
+        let queue_state = self.run_queue_mut(queue)?;
+        let previous = queue_state.switch_trap_level;
+        queue_state.switch_trap_level += delta;
+        Ok(previous)
+    }
+
+    pub fn switch_trap_level(
+        &self,
+        queue: CoreRunQueueId,
+    ) -> Result<i64, CoreSchedulerHandleError> {
+        Ok(self.run_queue(queue)?.switch_trap_level)
+    }
+
+    pub fn is_switch_trapped(
+        &self,
+        queue: CoreRunQueueId,
+    ) -> Result<bool, CoreSchedulerHandleError> {
+        Ok(self.switch_trap_level(queue)? > 0)
     }
 
     pub fn set_tasklet_block_trap(
@@ -4086,6 +4112,31 @@ mod tests {
                 .expect("second snapshot")
                 .scheduled
         );
+    }
+
+    #[test]
+    fn core_run_queue_owns_scheduler_switch_trap_level() {
+        let mut scheduler = CoreScheduler::new();
+        let first_queue = scheduler.create_run_queue();
+        let second_queue = scheduler.create_run_queue();
+
+        assert_eq!(scheduler.switch_trap_level(first_queue), Ok(0));
+        assert_eq!(scheduler.is_switch_trapped(first_queue), Ok(false));
+
+        assert_eq!(scheduler.switch_trap(first_queue, 2), Ok(0));
+        assert_eq!(scheduler.switch_trap_level(first_queue), Ok(2));
+        assert_eq!(scheduler.is_switch_trapped(first_queue), Ok(true));
+
+        assert_eq!(
+            scheduler.switch_trap_level(second_queue),
+            Ok(0),
+            "switch-trap level is per owner run queue"
+        );
+
+        assert_eq!(scheduler.switch_trap(first_queue, -1), Ok(2));
+        assert_eq!(scheduler.switch_trap(first_queue, -1), Ok(1));
+        assert_eq!(scheduler.switch_trap_level(first_queue), Ok(0));
+        assert_eq!(scheduler.is_switch_trapped(first_queue), Ok(false));
     }
 
     #[test]

@@ -33,9 +33,9 @@ Current evidence records this as `core_ownership_status=partial`. The core now
 has an initial `CoreScheduler` owner-thread handle API for Rust-owned
 `CoreTaskletId`/`CoreChannelId`/`CoreRunQueueId` unbuffered channel rendezvous
 state, bridge run-queue FIFO/count/remove/pop behavior, scheduled-state authority,
-explicit pause/resume lifecycle transitions, balance, blocked queues, preference
-clamping, close/open/clear, and block-trap no-mutation checks. Live PyO3
-tasklet/channel objects now carry opaque
+per-run-queue scheduler switch-trap depth, explicit pause/resume lifecycle
+transitions, balance, blocked queues, preference clamping, close/open/clear, and
+block-trap no-mutation checks. Live PyO3 tasklet/channel objects now carry opaque
 `CoreTaskletId`/`CoreChannelId` handles and mirror unbuffered channel balance,
 preference, block-trap, and blocked sender/receiver queue transitions through
 `CoreScheduler`; covered unbuffered send/receive transfers now consume
@@ -52,8 +52,10 @@ by bridge tests, use core pause/resume transitions for bind/remove/insert and
 switch pause/resume paths, and consult the core paused snapshot before direct
 running a paused tasklet, while live bridge scheduling now uses CoreScheduler run
 queues and maps selected `CoreTaskletId` values back to Python objects for
-callable execution; Python runtime sync no longer writes the core scheduled
-flag. Final report readiness still requires that status to become complete
+callable execution, and Python scheduler switch-trap entrypoints plus trapped
+operation guards now use CoreScheduler per-run-queue state. Python runtime sync
+no longer writes the core scheduled flag. Final report readiness still requires
+that status to become complete
 by making those core snapshots authoritative for remaining lifecycle decisions,
 Python payload handoff, queue identity adapters, callbacks, and broader
 lifecycle transitions.
@@ -116,7 +118,7 @@ covered claim.
 | channel basics | `PyChannel_New`, `PyChannel_Send`, `PyChannel_Receive`, `PyChannel_GetBalance`, `PyChannel_GetPreference`, `PyChannel_SetPreference`, `PyChannel_Check` | Implement unbuffered channels, blocked sender/receiver queues, balance rules (`+senders`, `-receivers`), preference clamping to `-1/0/1`, transfer matching, close/open/clear, remove-blocked cleanup, and block-trap no-mutation checks. The `CoreScheduler` handle API covers these as Rust-owned state, and the live PyO3 bridge now mirrors unbuffered channel balance/preference/block-trap/blocked-queue transitions through `CoreTaskletId`/`CoreChannelId` handles while using core send/receive results to select matched Python tasklets by core ID, decide immediate peer handoff, and select `channel.queue` fronts in covered paths. | Emit `channel.new`, `channel.send.attempt`, `channel.receive.attempt`, `channel.block`, `channel.transfer`, `channel.unblock`, `channel.balance`. | Convert Rust channel operations to `PyObject*` payload and error returns over opaque core handles. | Python payload storage, pending payload close-state, broader PyObject queue identity adapters, broader scheduling ownership, and exact exception text outside core semantics still need to move behind adapter boundaries. |
 | channel errors | `PyChannel_SendException`, `PyChannel_SendThrow` | Model typed error payloads as channel messages once value transfer is green. | Emit exception-transfer events with symbolic error names and args. | Preserve Python exception type/value/traceback behavior. | Full traceback preservation, `sys.exc_info()`, pending kill interactions with completed transfers. |
 | channel queues | `PyChannel_GetQueue` | Expose blocked queue head/order in core introspection. | Add queue snapshots for blocked sender/receiver order fixtures. | Return the exact blocked `PyTaskletObject*`. | Public iterator protocol and Python `QueueChannel` wrapper semantics. |
-| scheduler control | `PyScheduler_Schedule`, `PyScheduler_GetRunCount`, `PyScheduler_GetCurrent`, `PyScheduler_RunWithTimeout`, `PyScheduler_RunNTasklets`, `PyScheduler_GetScheduler` | Implement deterministic run queue, current tasklet, `schedule`, `schedule_remove`, full run, limited run, run-count semantics including main tasklet, deadlock detection, scheduler switch-trap no-mutation guards, and wall-clock `RunWithTimeout` pumping that always runs at least one queued tasklet for zero/expired timeouts. | Emit `scheduler.run.start`, `scheduler.switch`, `scheduler.schedule`, `scheduler.schedule_remove`, `scheduler.switch_trap`, `scheduler.switch_trap_error`, `scheduler.deadlock`, and final run counters. | Expose the capsule functions and Python `scheduler` object. | Callback reentrancy, advanced Greenlet exception paths, public Python API edge cases. |
+| scheduler control | `PyScheduler_Schedule`, `PyScheduler_GetRunCount`, `PyScheduler_GetCurrent`, `PyScheduler_RunWithTimeout`, `PyScheduler_RunNTasklets`, `PyScheduler_GetScheduler` | Implement deterministic run queue, current tasklet, `schedule`, `schedule_remove`, full run, limited run, run-count semantics including main tasklet, deadlock detection, CoreScheduler-owned per-run-queue switch-trap level and no-mutation guards, and wall-clock `RunWithTimeout` pumping that always runs at least one queued tasklet for zero/expired timeouts. | Emit `scheduler.run.start`, `scheduler.switch`, `scheduler.schedule`, `scheduler.schedule_remove`, `scheduler.switch_trap`, `scheduler.switch_trap_error`, `scheduler.deadlock`, and final run counters. | Expose the capsule functions and Python `scheduler` object. | Callback reentrancy, advanced Greenlet exception paths, public Python API edge cases. |
 | scheduler callbacks | `PyScheduler_SetChannelCallback`, `PyScheduler_GetChannelCallback`, `PyScheduler_SetScheduleCallback`, `PyScheduler_SetScheduleFastCallback` | Invoke Python schedule callbacks, share schedule callbacks across threads, and invoke the fast C schedule callback at switch points covered by bridge parity tests. | Emit callback-point events when useful for parity fixtures and invoke user callbacks in the Python bridge. | Python-level callback set/get storage, schedule callback basic ordering, multi-thread callback visibility, simple channel callback order, and fast C callback smoke are covered. | Callback exceptions, callback reentrancy, broader lifetime/refcount cleanup. |
 | scheduler counters | `PyScheduler_GetNumberOfActiveScheduleManagers`, `PyScheduler_GetNumberOfActiveChannels`, `PyScheduler_GetAllTimeTaskletCount`, `PyScheduler_GetActiveTaskletCount`, `PyScheduler_GetTaskletsCompletedLastRunWithTimeout`, `PyScheduler_GetTaskletsSwitchedLastRunWithTimeout` | Track active channel count, active/all-time tasklet count, completed count, and switch count. One schedule manager per core instance. | Include final counter assertions in fixtures where relevant. | Export exact integer-returning C API. | Python GC timing and schedule-manager reference cleanup. |
 

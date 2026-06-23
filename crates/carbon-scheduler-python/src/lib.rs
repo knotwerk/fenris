@@ -228,7 +228,6 @@ thread_local! {
     static SCHEDULE_MANAGER: GilDropRefCell<Option<ThreadScheduleManager>> = const { GilDropRefCell::new(None) };
     static EXECUTING_TASKLET: GilDropRefCell<Option<PyObject>> = const { GilDropRefCell::new(None) };
     static CHANNEL_CALLBACK: GilDropRefCell<Option<PyObject>> = const { GilDropRefCell::new(None) };
-    static SWITCH_TRAP_DEPTH: RefCell<i32> = const { RefCell::new(0) };
     static TASKLET_CONTEXT_C_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -1996,13 +1995,11 @@ fn get_schedule_callback(py: Python<'_>) -> PyObject {
 }
 
 #[pyfunction]
-fn switch_trap(delta: i32) -> i32 {
-    SWITCH_TRAP_DEPTH.with(|depth| {
-        let mut depth = depth.borrow_mut();
-        let previous = *depth;
-        *depth = previous + delta;
-        previous
-    })
+fn switch_trap(delta: i32) -> PyResult<i32> {
+    let Some(core_queue_id) = current_thread_core_run_queue_id(delta != 0) else {
+        return Ok(0);
+    };
+    Ok(bridge_core_switch_trap(core_queue_id, delta)? as i32)
 }
 
 #[pyfunction]
@@ -3113,6 +3110,14 @@ fn bridge_core_create_run_queue() -> CoreRunQueueId {
         .create_run_queue()
 }
 
+fn bridge_core_switch_trap(queue: CoreRunQueueId, delta: i32) -> PyResult<i64> {
+    with_bridge_core(|scheduler| scheduler.switch_trap(queue, i64::from(delta)))
+}
+
+fn bridge_core_is_switch_trapped(queue: CoreRunQueueId) -> PyResult<bool> {
+    with_bridge_core(|scheduler| scheduler.is_switch_trapped(queue))
+}
+
 fn bridge_core_reset_channel(channel: CoreChannelId, preference: i32) {
     let mut scheduler = bridge_core_scheduler()
         .lock()
@@ -3265,6 +3270,26 @@ fn tasklet_belongs_to_thread(
 
 fn thread_run_queue_index(queues: &[ThreadRunQueue], thread_id: ThreadId) -> Option<usize> {
     queues.iter().position(|entry| entry.thread_id == thread_id)
+}
+
+fn current_thread_core_run_queue_id(create: bool) -> Option<CoreRunQueueId> {
+    let thread_id = current_thread_id();
+    let mut queues = THREAD_RUN_QUEUES
+        .lock()
+        .expect("thread run queue lock poisoned");
+    if let Some(index) = thread_run_queue_index(&queues, thread_id) {
+        return Some(queues[index].core_queue_id);
+    }
+    if !create {
+        return None;
+    }
+    let core_queue_id = bridge_core_create_run_queue();
+    queues.push(ThreadRunQueue {
+        thread_id,
+        core_queue_id,
+        queue: VecDeque::new(),
+    });
+    Some(core_queue_id)
 }
 
 fn tasklet_object_by_core_id(
@@ -3601,7 +3626,12 @@ fn yield_current_greenlet(py: Python<'_>) -> PyResult<bool> {
 }
 
 fn ensure_switch_allowed() -> PyResult<()> {
-    if SWITCH_TRAP_DEPTH.with(|depth| *depth.borrow() > 0) {
+    let trapped = if let Some(core_queue_id) = current_thread_core_run_queue_id(false) {
+        bridge_core_is_switch_trapped(core_queue_id)?
+    } else {
+        false
+    };
+    if trapped {
         Err(PyRuntimeError::new_err("switch_trap"))
     } else {
         Ok(())
