@@ -20,7 +20,7 @@ Rust target:
 - `SCH-CORE-004`: nested parent links need a pure core model independent of Greenlet.
 - `SCH-CORE-005`: `run_n_tasklets` and monotonic timeout behavior need separate policies and counters.
 - `SCH-CORE-006`: schedule callback points should be trace events before FFI callback execution.
-- `SCH-CORE-007`: switch trap must be an integer level, not a boolean.
+- `SCH-CORE-007`: switch trap must be an integer level, not a boolean; this is now covered by the nested-level fixture.
 - `SCH-CORE-008`: exceptional tasklet outcomes need symbolic core states.
 - `SCH-CORE-009`: per-thread manager ownership and teardown require an FFI/core contract.
 - `SCH-CORE-010`: scheduler benchmarks are blocked until parity fixtures pass.
@@ -33,5 +33,4 @@ Rust target:
 - nested parent/yield fixtures.
 - bounded `run_n_tasklets(1)` and timeout-counter fixtures.
 - callback-point trace fixtures.
-- switch-trap level fixtures.
-
+- promoted switch-trap no-mutation and nested-level fixtures.

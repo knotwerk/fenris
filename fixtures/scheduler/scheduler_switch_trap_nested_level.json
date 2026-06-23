@@ -1,0 +1,83 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "scheduler_switch_trap_nested_level",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitchTrap::test_run_specific",
+      "carbonengine/scheduler/src/SchedulerModule.cpp::SchedulerSwitchTrap"
+    ],
+    "legacy_behavior": [
+      "Scheduler switch_trap is an integer nesting level rather than a bool.",
+      "Operations that would switch tasklets remain rejected until every positive trap increment is balanced.",
+      "Dropping the switch_trap level to zero allows the same direct tasklet run to complete."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "tasklets": [
+      {
+        "id": "direct_target",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "direct_target"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "switch_trap",
+          "delta": 2
+        },
+        {
+          "op": "run_tasklet",
+          "tasklet": "direct_target"
+        },
+        {
+          "op": "switch_trap",
+          "delta": -1
+        },
+        {
+          "op": "run_tasklet",
+          "tasklet": "direct_target"
+        },
+        {
+          "op": "switch_trap",
+          "delta": -1
+        },
+        {
+          "op": "run_tasklet",
+          "tasklet": "direct_target"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "switch_trap_level": 0,
+    "error": {
+      "type": "RuntimeError",
+      "message_contains": "switch_trap"
+    },
+    "completed": [
+      "direct_target"
+    ],
+    "tasklets": {
+      "direct_target": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "times_switched_to": 1
+      }
+    },
+    "all_time_tasklet_count": 2,
+    "active_tasklet_count": 1
+  }
+}

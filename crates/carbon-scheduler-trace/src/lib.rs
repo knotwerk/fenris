@@ -91,7 +91,7 @@ pub fn run_fixture_dir(path: impl AsRef<Path>) -> Result<FixtureDirReport> {
         gate: "scheduler-fixtures",
         status,
         report_ready: status == GateStatus::Pass,
-        coverage: "event_or_final_state_checked_invariant_checked_scheduler_semantic_fixtures_tasklet_run_bind_setup_rebind_schedule_run_n_timeout_counters_nested_timeout_remainder_scheduled_remove_nested_schedule_multi_level_blocked_yield_scheduler_switch_trap_no_mutation_channel_callback_preference_neutral_order_main_side_preference_close_clear_pending_teardown_cleanup_exception_throw_closed_channel_deadlock",
+        coverage: "event_or_final_state_checked_invariant_checked_scheduler_semantic_fixtures_tasklet_run_bind_setup_rebind_schedule_run_n_timeout_counters_nested_timeout_remainder_scheduled_remove_nested_schedule_multi_level_blocked_yield_scheduler_switch_trap_no_mutation_switch_trap_nested_level_channel_callback_preference_neutral_order_main_side_preference_close_clear_pending_teardown_cleanup_exception_throw_closed_channel_deadlock",
         fixture_count: reports.len(),
         passed,
         failed,

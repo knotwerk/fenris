@@ -184,8 +184,9 @@ covered claim.
 ## Scheduler Fixture Corpus
 
 The scheduler fixture corpus lives in `fixtures/scheduler/`. It currently has
-48 JSON fixtures: 47 with ordered event expectations and one final-state
-timeout snapshot. All run trace-gate invariant checks for event sequence order,
+49 JSON fixtures: 48 with ordered event expectations and one final-state
+timeout snapshot. The latest promoted fixture covers nested/counting
+switch-trap level semantics. All run trace-gate invariant checks for event sequence order,
 run-count/tasklet-count consistency, blocked
 tasklet state, channel balance, queue-front consistency, and channel/tasklet
 blocked-queue cross-links. These fixtures
