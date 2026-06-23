@@ -664,28 +664,28 @@ impl Tasklet {
     }
 
     #[getter]
-    fn alive(&self) -> bool {
-        self.alive
+    fn alive(&self) -> PyResult<bool> {
+        Ok(self.core_snapshot()?.alive)
     }
 
     #[getter]
-    fn blocked(&self) -> bool {
-        self.blocked
+    fn blocked(&self) -> PyResult<bool> {
+        Ok(self.core_snapshot()?.blocked_on.is_some())
     }
 
     #[getter]
-    fn scheduled(&self) -> bool {
-        self.scheduled
+    fn scheduled(&self) -> PyResult<bool> {
+        Ok(self.core_snapshot()?.scheduled)
     }
 
     #[getter]
-    fn paused(&self) -> bool {
-        self.paused
+    fn paused(&self) -> PyResult<bool> {
+        Ok(self.core_snapshot()?.paused)
     }
 
     #[getter]
-    fn block_trap(&self) -> bool {
-        self.block_trap
+    fn block_trap(&self) -> PyResult<bool> {
+        Ok(self.core_snapshot()?.block_trap)
     }
 
     #[setter]
@@ -725,8 +725,8 @@ impl Tasklet {
     }
 
     #[getter]
-    fn times_switched_to(&self) -> u64 {
-        self.times_switched_to
+    fn times_switched_to(&self) -> PyResult<u64> {
+        Ok(self.core_snapshot()?.times_switched_to)
     }
 
     #[getter]
@@ -1854,11 +1854,13 @@ fn schedule(py: Python<'_>) -> PyResult<()> {
     {
         let mut current = current.bind(py).try_borrow_mut()?;
         current.scheduled = true;
+        bridge_core_set_tasklet_scheduled_snapshot(current.core_id, true);
     }
     let result = run_queued_tasklets(py, 1).map(|_| ());
     {
         let mut current = current.bind(py).try_borrow_mut()?;
         current.scheduled = false;
+        bridge_core_set_tasklet_scheduled_snapshot(current.core_id, false);
     }
     result
 }
@@ -3158,6 +3160,13 @@ fn bridge_core_resume_tasklet(tasklet: CoreTaskletId) {
         .lock()
         .expect("scheduler core bridge lock poisoned");
     let _ = scheduler.resume_tasklet(tasklet);
+}
+
+fn bridge_core_set_tasklet_scheduled_snapshot(tasklet: CoreTaskletId, scheduled: bool) {
+    let mut scheduler = bridge_core_scheduler()
+        .lock()
+        .expect("scheduler core bridge lock poisoned");
+    let _ = scheduler.set_tasklet_scheduled_snapshot(tasklet, scheduled);
 }
 
 fn bridge_core_schedule_tasklet_back(
@@ -4952,10 +4961,12 @@ extern "C" fn c_api_py_tasklet_get_times_switched_to(tasklet: *mut ffi::PyObject
         borrowed_any_from_ptr(py, tasklet)
             .and_then(|object| {
                 object.downcast::<Tasklet>().ok().and_then(|tasklet| {
-                    tasklet
-                        .try_borrow()
-                        .ok()
-                        .map(|tasklet| tasklet.times_switched_to() as c_long)
+                    tasklet.try_borrow().ok().and_then(|tasklet| {
+                        tasklet
+                            .core_snapshot()
+                            .ok()
+                            .map(|snapshot| snapshot.times_switched_to as c_long)
+                    })
                 })
             })
             .unwrap_or(0)
@@ -6083,6 +6094,104 @@ assert tasklet.times_switched_to == 1
             assert!(!snapshot.scheduled);
             assert!(!snapshot.paused);
             assert_eq!(snapshot.times_switched_to, 1);
+        });
+    }
+
+    #[test]
+    fn py_tasklet_public_state_getters_read_core_snapshots() {
+        Python::with_gil(|py| {
+            let scheduler = load_legacy_scheduler_module(py).expect("load scheduler package");
+            let locals = PyDict::new_bound(py);
+            locals.set_item("scheduler", &scheduler).unwrap();
+
+            py.run_bound(
+                r#"
+events = []
+def record():
+    events.append("ran")
+
+tasklet = scheduler.tasklet(record)
+tasklet()
+assert tasklet.alive is True
+assert tasklet.scheduled is True
+assert tasklet.paused is False
+assert tasklet.block_trap is False
+assert tasklet.times_switched_to == 0
+"#,
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("tasklet should be scheduled before bridge-local drift");
+
+            let tasklet = locals.get_item("tasklet").unwrap().unwrap();
+            let tasklet = tasklet.downcast::<Tasklet>().unwrap();
+            {
+                let mut tasklet = tasklet.try_borrow_mut().unwrap();
+                tasklet.alive = false;
+                tasklet.scheduled = false;
+                tasklet.paused = true;
+                tasklet.block_trap = true;
+                tasklet.times_switched_to = 99;
+            }
+
+            py.run_bound(
+                r#"
+assert tasklet.alive is True
+assert tasklet.scheduled is True
+assert tasklet.paused is False
+assert tasklet.block_trap is False
+assert tasklet.times_switched_to == 0
+tasklet.block_trap = True
+"#,
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("public getters should read core snapshot, not drifted bridge fields");
+
+            {
+                let mut tasklet = tasklet.try_borrow_mut().unwrap();
+                tasklet.block_trap = false;
+            }
+            py.run_bound(
+                r#"
+assert tasklet.block_trap is True
+"#,
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("block_trap getter should remain core-authoritative after setter sync");
+
+            py.run_bound(
+                r#"
+channel = scheduler.channel()
+def receive():
+    channel.receive()
+
+receiver = scheduler.tasklet(receive)
+receiver()
+receiver.run()
+assert receiver.blocked is True
+"#,
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("receiver should block through core channel state");
+
+            let receiver = locals.get_item("receiver").unwrap().unwrap();
+            let receiver = receiver.downcast::<Tasklet>().unwrap();
+            {
+                let mut receiver = receiver.try_borrow_mut().unwrap();
+                receiver.blocked = false;
+            }
+            py.run_bound(
+                r#"
+assert receiver.blocked is True
+channel.clear()
+"#,
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("blocked getter should read core blocked_on state");
         });
     }
 

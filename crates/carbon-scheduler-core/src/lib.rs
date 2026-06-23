@@ -599,6 +599,19 @@ impl CoreScheduler {
         Ok(())
     }
 
+    pub fn set_tasklet_scheduled_snapshot(
+        &mut self,
+        tasklet: CoreTaskletId,
+        scheduled: bool,
+    ) -> Result<(), CoreSchedulerHandleError> {
+        self.ensure_tasklet(tasklet)?;
+        if !scheduled {
+            self.remove_tasklet_from_run_queues(tasklet);
+        }
+        self.tasklet_mut(tasklet)?.scheduled = scheduled;
+        Ok(())
+    }
+
     pub fn remove_runnable_tasklet(
         &mut self,
         tasklet: CoreTaskletId,
@@ -4137,6 +4150,28 @@ mod tests {
         assert_eq!(scheduler.switch_trap(first_queue, -1), Ok(1));
         assert_eq!(scheduler.switch_trap_level(first_queue), Ok(0));
         assert_eq!(scheduler.is_switch_trapped(first_queue), Ok(false));
+    }
+
+    #[test]
+    fn core_tasklet_snapshot_records_transient_scheduled_state() {
+        let mut scheduler = CoreScheduler::new();
+        let tasklet = scheduler.create_tasklet();
+
+        assert_eq!(
+            scheduler.tasklet_snapshot(tasklet).unwrap().scheduled,
+            false
+        );
+        scheduler
+            .set_tasklet_scheduled_snapshot(tasklet, true)
+            .expect("set transient scheduled");
+        assert_eq!(scheduler.tasklet_snapshot(tasklet).unwrap().scheduled, true);
+        scheduler
+            .set_tasklet_scheduled_snapshot(tasklet, false)
+            .expect("clear transient scheduled");
+        assert_eq!(
+            scheduler.tasklet_snapshot(tasklet).unwrap().scheduled,
+            false
+        );
     }
 
     #[test]
