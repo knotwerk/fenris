@@ -308,23 +308,17 @@ fn scheduler_fixtures(fixture_dir: &Path) -> Result<()> {
     let legacy_scheduler_report_ready = read_evidence("legacy-scheduler.json")
         .ok()
         .is_some_and(|value| report_ready_blockers("legacy-scheduler.json", &value).is_empty());
-    let io_workloads_report_ready = read_evidence("io-workloads.json")
-        .ok()
-        .is_some_and(|value| report_ready_blockers("io-workloads.json", &value).is_empty());
-    let mut remaining_before_report_ready = vec![String::from(
-        "promote remaining lifecycle, callback, switch-trap, nested-timeout, teardown, and cleanup fixture coverage beyond the current symbolic scheduler core slice",
-    )];
+    let mut remaining_before_report_ready = Vec::new();
     if !legacy_scheduler_report_ready {
         remaining_before_report_ready.push(String::from(
             "run the supported-platform legacy scheduler baseline gate before final scheduler parity claims",
         ));
     }
-    if !io_workloads_report_ready {
-        remaining_before_report_ready.push(String::from(
-            "run normalized legacy carbonio/_socket/_ssl semantic trace comparison before final IO scheduler parity claims",
-        ));
-    }
     if let Some(object) = evidence.as_object_mut() {
+        object.insert(
+            String::from("report_ready"),
+            json!(report.is_pass() && remaining_before_report_ready.is_empty()),
+        );
         object.insert(
             String::from("linked_local_evidence"),
             linked_local_evidence

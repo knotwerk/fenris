@@ -65,6 +65,9 @@ pub enum Operation {
     },
     Schedule,
     ScheduleRemove,
+    SwitchTrap {
+        delta: i64,
+    },
     Send {
         channel: String,
         value: Value,
@@ -99,6 +102,8 @@ pub enum Operation {
     },
     Clear {
         channel: String,
+        #[serde(default)]
+        pending: bool,
     },
     QueueFront {
         channel: String,
@@ -137,6 +142,8 @@ pub enum Operation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum MainStep {
+    Schedule,
+    ScheduleRemove,
     RunScheduler,
     RunSchedulerN {
         count: usize,
@@ -165,6 +172,9 @@ pub enum MainStep {
     SetBlockTrap {
         value: bool,
     },
+    SwitchTrap {
+        delta: i64,
+    },
     Receive {
         channel: String,
         #[serde(default)]
@@ -178,6 +188,8 @@ pub enum MainStep {
     },
     Clear {
         channel: String,
+        #[serde(default)]
+        pending: bool,
     },
     Remove {
         tasklet: String,
@@ -1100,6 +1112,7 @@ struct Runtime {
     observations: BTreeMap<String, Vec<Value>>,
     error: Option<Value>,
     main_block_trap: bool,
+    switch_trap_level: i64,
     last_timeout_completed_tasklets: usize,
     last_timeout_switched_tasklets: usize,
 }
@@ -1190,6 +1203,7 @@ impl Runtime {
             observations: BTreeMap::new(),
             error: None,
             main_block_trap: false,
+            switch_trap_level: 0,
             last_timeout_completed_tasklets: 0,
             last_timeout_switched_tasklets: 0,
         })
@@ -1282,12 +1296,21 @@ impl Runtime {
     fn run_script(&mut self, steps: &[MainStep]) -> Result<(), SchedulerError> {
         for step in steps {
             match step {
+                MainStep::Schedule => {
+                    self.schedule_main(false)?;
+                }
+                MainStep::ScheduleRemove => {
+                    self.schedule_main(true)?;
+                }
                 MainStep::RunScheduler => self.run_scheduler()?,
                 MainStep::RunSchedulerN { count } => self.run_scheduler_n(*count)?,
                 MainStep::RunSchedulerWithTimeout { timeout_ns } => {
                     self.run_scheduler_with_timeout(*timeout_ns)?
                 }
                 MainStep::Send { channel, value } => {
+                    if self.reject_if_switch_trapped("main", "send") {
+                        continue;
+                    }
                     self.main_send_entry(channel, value.clone())?;
                 }
                 MainStep::SendException {
@@ -1295,6 +1318,9 @@ impl Runtime {
                     exception,
                     args,
                 } => {
+                    if self.reject_if_switch_trapped("main", "send_exception") {
+                        continue;
+                    }
                     self.main_send_payload(
                         channel,
                         TransferPayload::Exception {
@@ -1309,6 +1335,9 @@ impl Runtime {
                     value,
                     traceback,
                 } => {
+                    if self.reject_if_switch_trapped("main", "send_throw") {
+                        continue;
+                    }
                     self.main_send_payload(
                         channel,
                         TransferPayload::Throw {
@@ -1321,12 +1350,20 @@ impl Runtime {
                 MainStep::SetBlockTrap { value } => {
                     self.set_main_block_trap(*value);
                 }
+                MainStep::SwitchTrap { delta } => {
+                    self.set_switch_trap(*delta);
+                }
                 MainStep::Receive { channel, bind } => {
+                    if self.reject_if_switch_trapped("main", "receive") {
+                        continue;
+                    }
                     self.main_receive_payload(channel, bind.as_deref())?;
                 }
                 MainStep::Close { channel } => self.close_channel("main", channel)?,
                 MainStep::Open { channel } => self.open_channel("main", channel)?,
-                MainStep::Clear { channel } => self.clear_channel("main", channel, false)?,
+                MainStep::Clear { channel, pending } => {
+                    self.clear_channel("main", channel, *pending)?
+                }
                 MainStep::Remove { tasklet } => {
                     self.remove_tasklet("main", tasklet)?;
                 }
@@ -1334,6 +1371,10 @@ impl Runtime {
                     self.insert_tasklet("main", tasklet)?;
                 }
                 MainStep::Kill { tasklet, pending } => {
+                    self.tasklet(tasklet)?;
+                    if self.reject_if_switch_trapped("main", "kill") {
+                        continue;
+                    }
                     self.kill_tasklet("main", tasklet, *pending)?;
                 }
                 MainStep::Switch { tasklet } => {
@@ -1356,6 +1397,10 @@ impl Runtime {
                     self.unbind_tasklet("main", tasklet)?;
                 }
                 MainStep::RaiseException { tasklet, exception } => {
+                    self.tasklet(tasklet)?;
+                    if self.reject_if_switch_trapped("main", "raise_exception") {
+                        continue;
+                    }
                     self.raise_exception_on_tasklet(tasklet, exception, "main")?;
                 }
                 MainStep::QueueFront { channel, target } => {
@@ -1366,17 +1411,52 @@ impl Runtime {
         Ok(())
     }
 
+    fn schedule_main(&mut self, remove: bool) -> Result<(), SchedulerError> {
+        let operation = if remove {
+            "schedule_remove"
+        } else {
+            "schedule"
+        };
+        if self.reject_if_switch_trapped("main", operation) {
+            return Ok(());
+        }
+        let kind = if remove {
+            "scheduler.schedule_remove"
+        } else {
+            "scheduler.schedule"
+        };
+        self.emit(
+            kind,
+            [
+                ("actor", json!("main")),
+                ("tasklet", json!("main")),
+                ("run_count", json!(self.run_count())),
+                ("runnable", json!(self.runnable_snapshot())),
+            ],
+        );
+        Ok(())
+    }
+
     fn run_scheduler(&mut self) -> Result<(), SchedulerError> {
+        if self.reject_if_switch_trapped("main", "run") {
+            return Ok(());
+        }
         self.run_scheduler_with_limit(None, json!("until_idle"))
             .map(|_| ())
     }
 
     fn run_scheduler_n(&mut self, count: usize) -> Result<(), SchedulerError> {
+        if self.reject_if_switch_trapped("main", "run") {
+            return Ok(());
+        }
         self.run_scheduler_with_limit(Some(count), json!(count))
             .map(|_| ())
     }
 
     fn run_scheduler_with_timeout(&mut self, timeout_ns: i64) -> Result<(), SchedulerError> {
+        if self.reject_if_switch_trapped("main", "run_for_time") {
+            return Ok(());
+        }
         self.last_timeout_completed_tasklets = 0;
         self.last_timeout_switched_tasklets = 0;
         let tasklet_limit = if timeout_ns <= 0 { Some(1) } else { None };
@@ -1430,6 +1510,9 @@ impl Runtime {
 
     fn run_tasklet_entry(&mut self, tasklet: &str) -> Result<(), SchedulerError> {
         self.ensure_tasklet_can_run(tasklet, "run")?;
+        if self.reject_if_switch_trapped("main", "tasklet.run") {
+            return Ok(());
+        }
 
         let nested_tail = self.direct_run_nested_tail(tasklet)?;
 
@@ -1709,6 +1792,11 @@ impl Runtime {
                 self.current = String::from("main");
                 Ok(StepOutcome::Paused)
             }
+            Operation::SwitchTrap { delta } => {
+                self.set_switch_trap(delta);
+                self.advance_pc(tasklet)?;
+                Ok(StepOutcome::Continue)
+            }
             Operation::Send { channel, value } => self.send_from_tasklet(tasklet, &channel, value),
             Operation::SendException {
                 channel,
@@ -1751,9 +1839,9 @@ impl Runtime {
                 self.open_channel(tasklet, &channel)?;
                 Ok(StepOutcome::Continue)
             }
-            Operation::Clear { channel } => {
+            Operation::Clear { channel, pending } => {
                 self.advance_pc(tasklet)?;
-                self.clear_channel(tasklet, &channel, false)?;
+                self.clear_channel(tasklet, &channel, pending)?;
                 Ok(StepOutcome::Continue)
             }
             Operation::QueueFront { channel, target } => {
@@ -2628,6 +2716,9 @@ impl Runtime {
 
     fn switch_tasklet_entry(&mut self, tasklet: &str) -> Result<(), SchedulerError> {
         self.ensure_tasklet_can_run(tasklet, "switch")?;
+        if self.reject_if_switch_trapped("main", "tasklet.switch") {
+            return Ok(());
+        }
         let from = self.current.clone();
         self.switch(&from, tasklet, "switch_tasklet");
         self.current = tasklet.to_string();
@@ -3091,6 +3182,10 @@ impl Runtime {
         root.insert(String::from("current"), json!(self.current));
         root.insert(String::from("run_count"), json!(self.run_count()));
         root.insert(
+            String::from("switch_trap_level"),
+            json!(self.switch_trap_level),
+        );
+        root.insert(
             String::from("last_timeout_completed_tasklets"),
             json!(self.last_timeout_completed_tasklets),
         );
@@ -3376,6 +3471,41 @@ impl Runtime {
                 ("run_count", json!(self.run_count())),
             ],
         );
+    }
+
+    fn set_switch_trap(&mut self, delta: i64) {
+        let previous = self.switch_trap_level;
+        self.switch_trap_level += delta;
+        self.emit(
+            "scheduler.switch_trap",
+            [
+                ("actor", json!(self.current)),
+                ("delta", json!(delta)),
+                ("previous", json!(previous)),
+                ("switch_trap_level", json!(self.switch_trap_level)),
+            ],
+        );
+    }
+
+    fn reject_if_switch_trapped(&mut self, actor: &str, operation: &str) -> bool {
+        if self.switch_trap_level == 0 {
+            return false;
+        }
+        let error = json!({
+            "type": "RuntimeError",
+            "message_contains": "switch_trap"
+        });
+        self.error = Some(error.clone());
+        self.emit(
+            "scheduler.switch_trap_error",
+            [
+                ("actor", json!(actor)),
+                ("operation", json!(operation)),
+                ("switch_trap_level", json!(self.switch_trap_level)),
+                ("error", error),
+            ],
+        );
+        true
     }
 
     fn set_tasklet_block_trap(&mut self, tasklet: &str, value: bool) -> Result<(), SchedulerError> {

@@ -1,0 +1,85 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "scheduler_timeout_nested_remainder",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/capiTest/Scheduler.cpp::PyScheduler_RunForTime",
+      "tests/python/scheduler/tests/test_scheduler.py::TestScheduleOrderNoLimitWithNestedTasklets::test_nested_tasklet_run_order"
+    ],
+    "legacy_behavior": [
+      "A zero-time run-for-time call always runs one eligible tasklet.",
+      "Nested tasklets spawned by that first tasklet remain scheduled after the timeout-limited run and are drained by the next scheduler run.",
+      "Timeout counters report the first bounded run, not the later unbounded drain."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "tasklets": [
+      {
+        "id": "parent",
+        "body": [
+          {
+            "op": "spawn",
+            "tasklet": "child"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "parent"
+          }
+        ]
+      },
+      {
+        "id": "child",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "child"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler_with_timeout",
+          "timeout_ns": 0
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "switch_trap_level": 0,
+    "last_timeout_completed_tasklets": 1,
+    "last_timeout_switched_tasklets": 2,
+    "completed": [
+      "parent",
+      "child"
+    ],
+    "tasklets": {
+      "parent": {
+        "alive": false,
+        "scheduled": false,
+        "blocked": false,
+        "times_switched_to": 1
+      },
+      "child": {
+        "alive": false,
+        "scheduled": false,
+        "blocked": false,
+        "times_switched_to": 1
+      }
+    },
+    "all_time_tasklet_count": 3,
+    "active_tasklet_count": 1
+  }
+}

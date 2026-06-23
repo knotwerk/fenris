@@ -1,0 +1,103 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_clear_pending_exit_cleanup",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_channel_test_clear_blocked",
+      "carbonengine/scheduler/src/Channel.cpp::ClearBlocked",
+      "carbonengine/scheduler/src/Tasklet.cpp::Tasklet::Kill"
+    ],
+    "legacy_behavior": [
+      "Channel::ClearBlocked(true) marks blocked tasklets with pending TaskletExit instead of completing them immediately.",
+      "Pending-exit blocked receivers and senders are rescheduled, run once, raise TaskletExit, and then leave channel queues clean."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "channels": [
+      {
+        "id": "receive_queue"
+      },
+      {
+        "id": "send_queue"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "blocked_receiver",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "receive_queue"
+          }
+        ]
+      },
+      {
+        "id": "blocked_sender",
+        "body": [
+          {
+            "op": "send",
+            "channel": "send_queue",
+            "value": "payload"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "clear",
+          "channel": "receive_queue",
+          "pending": true
+        },
+        {
+          "op": "clear",
+          "channel": "send_queue",
+          "pending": true
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "tasklets": {
+      "blocked_receiver": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "pending_exit": false,
+        "times_switched_to": 2
+      },
+      "blocked_sender": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "pending_exit": false,
+        "times_switched_to": 2
+      }
+    },
+    "channels": {
+      "receive_queue": {
+        "balance": 0,
+        "blocked_receivers": [],
+        "blocked_senders": []
+      },
+      "send_queue": {
+        "balance": 0,
+        "blocked_receivers": [],
+        "blocked_senders": []
+      }
+    },
+    "all_time_tasklet_count": 3,
+    "active_tasklet_count": 1
+  }
+}

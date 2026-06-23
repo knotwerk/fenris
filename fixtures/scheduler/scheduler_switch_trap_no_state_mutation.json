@@ -1,0 +1,259 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "scheduler_switch_trap_no_state_mutation",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitch::test_switch_trapped",
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitchTrap::test_schedule",
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitchTrap::test_schedule_remove",
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitchTrap::test_run",
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitchTrap::test_run_specific",
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitchTrap::test_send",
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitchTrap::test_receive",
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitchTrap::test_raise_exception",
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitchTrap::test_kill",
+      "carbonengine/scheduler/src/SchedulerModule.cpp::SchedulerSwitchTrap",
+      "carbonengine/scheduler/src/Tasklet.cpp::Tasklet::SwitchTo"
+    ],
+    "legacy_behavior": [
+      "A non-zero scheduler switch_trap level rejects operations that would switch tasklets.",
+      "Rejected trapped operations leave runnable queues, blocked channel queues, and target tasklet lifecycle state unchanged.",
+      "Dropping the switch_trap level back to zero allows the same target tasklets to run normally."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "channels": [
+      {
+        "id": "send_to_receiver",
+        "preference": -1
+      },
+      {
+        "id": "receive_from_sender",
+        "preference": 1
+      },
+      {
+        "id": "raise_target_channel"
+      },
+      {
+        "id": "kill_target_channel"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "receiver",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "send_to_receiver",
+            "bind": "received"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver"
+          }
+        ]
+      },
+      {
+        "id": "sender",
+        "body": [
+          {
+            "op": "send",
+            "channel": "receive_from_sender",
+            "value": "from-sender"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "sender"
+          }
+        ]
+      },
+      {
+        "id": "raise_target",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "raise_target_channel"
+          }
+        ]
+      },
+      {
+        "id": "kill_target",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "kill_target_channel"
+          }
+        ]
+      },
+      {
+        "id": "direct_target",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "direct_target"
+          }
+        ]
+      },
+      {
+        "id": "switch_target",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "switch_target"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "switch_trap",
+          "delta": 1
+        },
+        {
+          "op": "send",
+          "channel": "send_to_receiver",
+          "value": "main-to-receiver"
+        },
+        {
+          "op": "receive",
+          "channel": "receive_from_sender"
+        },
+        {
+          "op": "raise_exception",
+          "tasklet": "raise_target",
+          "exception": "RuntimeError"
+        },
+        {
+          "op": "kill",
+          "tasklet": "kill_target"
+        },
+        {
+          "op": "run_tasklet",
+          "tasklet": "direct_target"
+        },
+        {
+          "op": "switch",
+          "tasklet": "switch_target"
+        },
+        {
+          "op": "schedule"
+        },
+        {
+          "op": "schedule_remove"
+        },
+        {
+          "op": "switch_trap",
+          "delta": -1
+        },
+        {
+          "op": "run_tasklet",
+          "tasklet": "direct_target"
+        },
+        {
+          "op": "switch",
+          "tasklet": "switch_target"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "switch_trap_level": 0,
+    "error": {
+      "type": "RuntimeError",
+      "message_contains": "switch_trap"
+    },
+    "completed": [
+      "direct_target",
+      "switch_target"
+    ],
+    "tasklets": {
+      "receiver": {
+        "alive": true,
+        "blocked": true,
+        "scheduled": false,
+        "blocked_on": "send_to_receiver",
+        "blocked_direction": "receive"
+      },
+      "sender": {
+        "alive": true,
+        "blocked": true,
+        "scheduled": false,
+        "blocked_on": "receive_from_sender",
+        "blocked_direction": "send"
+      },
+      "raise_target": {
+        "alive": true,
+        "blocked": true,
+        "scheduled": false,
+        "blocked_on": "raise_target_channel",
+        "blocked_direction": "receive"
+      },
+      "kill_target": {
+        "alive": true,
+        "blocked": true,
+        "scheduled": false,
+        "blocked_on": "kill_target_channel",
+        "blocked_direction": "receive"
+      },
+      "direct_target": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "times_switched_to": 1
+      },
+      "switch_target": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "times_switched_to": 1
+      }
+    },
+    "channels": {
+      "send_to_receiver": {
+        "balance": -1,
+        "blocked_receivers": [
+          "receiver"
+        ],
+        "blocked_senders": []
+      },
+      "receive_from_sender": {
+        "balance": 1,
+        "blocked_receivers": [],
+        "blocked_senders": [
+          "sender"
+        ]
+      },
+      "raise_target_channel": {
+        "balance": -1,
+        "blocked_receivers": [
+          "raise_target"
+        ],
+        "blocked_senders": []
+      },
+      "kill_target_channel": {
+        "balance": -1,
+        "blocked_receivers": [
+          "kill_target"
+        ],
+        "blocked_senders": []
+      }
+    },
+    "all_time_tasklet_count": 7,
+    "active_tasklet_count": 5
+  }
+}

@@ -65,8 +65,8 @@ workspace has these useful pieces:
   respectively.
 - `cargo run -p xtask -- rust-scheduler-python` records the PyO3 bridge as a
   compatibility boundary, not the final scheduler architecture.
-- `target/carbon/evidence/scheduler-fixtures.json` passes but remains
-  `report_ready=false`.
+- `target/carbon/evidence/scheduler-fixtures.json` passes `48/48` semantic
+  fixtures and is `report_ready=true` for the scheduler fixture gate.
 - `target/carbon/evidence/legacy-scheduler.json` now passes the native Linux
   source-build path with the unchanged legacy Python unittest suite (`210`
   tests, `7` skipped) and `36/36` C API CTest cases, with `report_ready=true`.
@@ -226,7 +226,7 @@ is the shortest path from the current progress report to the final HTML report.
 
 | Gate | Current evidence | Blocker | Next proof |
 | --- | --- | --- | --- |
-| Scheduler semantic fixtures | `scheduler-fixtures.json` passes 45/45 fixtures, `report_ready=false` | Fixture slice is still described as initial coverage | Promote fixtures for remaining lifecycle, callback, switch-trap, nested timeout, teardown, and cleanup cases, then update `remaining_before_report_ready`. |
+| Scheduler semantic fixtures | `scheduler-fixtures.json` passes 48/48 fixtures, `report_ready=true` | Closed for the current deterministic core fixture gate | Keep this gate green while core ownership moves out of the Python bridge; add new fixtures when ownership changes touch tasklet, channel, timeout, switch-trap, or cleanup semantics. |
 | Legacy scheduler baseline | `legacy-scheduler.json` passes `cargo run -p xtask -- legacy-scheduler native-linux` on this host with `210` Python tests, `7` skips, and `36/36` C API CTest cases, `report_ready=true` | Closed for this host | Keep this gate green before publishing scheduler comparison evidence. |
 | Rust scheduler Python/C API | `rust-scheduler-python.json` passes, `core_ownership_status.status=partial` | Python payload handoff, queue identity adapters, remaining lifecycle decisions, callbacks, refcount/GC, and in-process C API coverage are not final | Make `CoreScheduler` snapshots authoritative for the remaining lifecycle/channel decisions while PyO3 holds only compatibility payloads; keep unchanged Python tests and C API source slices green. |
 | Realistic IO workloads | `io-workloads.json` passes loopback and fixture-only traces | No captured legacy `carbonio`/`_socket`/`_ssl` semantic trace comparison | Capture or import supported-platform legacy Carbon IO traces and compare normalized wake/send/throw events against the Rust bridge. |
@@ -1782,28 +1782,26 @@ Exit gate:
    commit the current green progress baseline.
 2. Import a supported Windows/macOS legacy scheduler CTest artifact, or
    explicitly remove scheduler speedup claims from the final report scope.
-3. Promote the scheduler fixture gate by adding the remaining lifecycle,
-   callback, switch-trap, nested-timeout, teardown, and cleanup fixture slices.
-4. Continue the core-ownership drain in `carbon-scheduler-python` until
+3. Continue the core-ownership drain in `carbon-scheduler-python` until
    `rust-scheduler-python.json` can move from `core_ownership_status=partial` to
    complete for the claimed surface.
-5. Capture or import normalized legacy Carbon IO traces for `carbonio`,
+4. Capture or import normalized legacy Carbon IO traces for `carbonio`,
    `_socket`, and `_ssl`, then compare them against the Rust bridge traces.
-6. Keep `scheduler-comparison.json` green as the matched legacy scheduler vs
+5. Keep `scheduler-comparison.json` green as the matched legacy scheduler vs
    Rust scheduler bridge lab benchmark; use it for lab comparison only until a
    real game-environment workload is captured.
-7. Regenerate `cargo run -p xtask -- report-progress` after each evidence slice
+6. Regenerate `cargo run -p xtask -- report-progress` after each evidence slice
    and keep `cargo run -p xtask -- report` blocked until every included claim is
    report-ready.
-8. After the final report gate is clean, record the baseline SHA, local test
+7. After the final report gate is clean, record the baseline SHA, local test
    commands, and green test counts.
-9. Add scheduler-specific microbenchmarks for runnable queues, channel
+8. Add scheduler-specific microbenchmarks for runnable queues, channel
    rendezvous, `run_n_tasklets`, memory per tasklet, and memory per channel.
-10. Inventory dense game-side workloads and select the first three 20x
+9. Inventory dense game-side workloads and select the first three 20x
     candidates.
-11. Build a scalar Rust snapshot baseline for the top 20x candidate before
+10. Build a scalar Rust snapshot baseline for the top 20x candidate before
     Rayon, SIMD, or a domain rewrite.
-12. Prototype dense generational arenas behind the existing fixture runner only
+11. Prototype dense generational arenas behind the existing fixture runner only
     after benchmark evidence shows the baseline bottleneck.
 13. Replace boolean lifecycle in the Rust model with an explicit hot-state enum
     after the fixture/bridge parity gates cover the affected lifecycle cases.
