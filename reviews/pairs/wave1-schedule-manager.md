@@ -18,7 +18,7 @@ Rust target:
 - `SCH-CORE-002`: `BACK`, `FRONT_PLUS_ONE`, `schedule_remove`, and targeted-run boundary behavior need implementation and fixtures.
 - `SCH-CORE-003`: main-tasklet deadlock handling must drain runnable children before raising when applicable.
 - `SCH-CORE-004`: nested parent links need a pure core model independent of Greenlet.
-- `SCH-CORE-005`: `run_n_tasklets` and monotonic timeout behavior need separate policies and counters.
+- `SCH-CORE-005`: partial; bounded `run_n_tasklets` fixtures and timeout counters exist, while real monotonic timeout policy remains open.
 - `SCH-CORE-006`: schedule callback points should be trace events before FFI callback execution.
 - `SCH-CORE-007`: switch trap must be an integer level, not a boolean; this is now covered by the nested-level fixture.
 - `SCH-CORE-008`: exceptional tasklet outcomes need symbolic core states.
@@ -31,6 +31,6 @@ Rust target:
 - schedule/remove and reschedule-position fixtures.
 - immediate send/receive deadlock fixtures.
 - nested parent/yield fixtures.
-- bounded `run_n_tasklets(1)` and timeout-counter fixtures.
+- real monotonic timeout-policy fixtures beyond the existing bounded `run_n_tasklets(1)` and timeout-counter coverage.
 - callback-point trace fixtures.
 - promoted switch-trap no-mutation and nested-level fixtures.

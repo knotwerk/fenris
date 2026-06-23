@@ -1,0 +1,103 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "scheduler_run_n_tasklets_limited_multi_level_schedule_order_no_nested",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_utils.py::TestWithLimit",
+      "tests/python/scheduler/tests/test_scheduler.py::TestScheduleOrderWithLimitWithoutNestedTasklets::test_multi_level_nested_tasklet_run_order_with_schedule"
+    ],
+    "legacy_behavior": [
+      "The limited scheduler harness repeatedly calls run_n_tasklets(1) while runnable tasklets remain.",
+      "Multi-level nested tasklets disabled should preserve the legacy completion order t1, t2, t6, t3, t5, t4 across one-tasklet pumps."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "nested_tasklets": false,
+    "tasklets": [
+      { "id": "t1", "body": [{ "op": "append", "target": "completed", "value": "t1" }] },
+      {
+        "id": "nested1",
+        "body": [
+          { "op": "spawn", "tasklet": "t2" },
+          { "op": "spawn", "tasklet": "yield1" },
+          { "op": "spawn", "tasklet": "nested2" },
+          { "op": "spawn", "tasklet": "t5" },
+          { "op": "run_tasklet", "tasklet": "t2" }
+        ]
+      },
+      { "id": "t6", "body": [{ "op": "append", "target": "completed", "value": "t6" }] },
+      {
+        "id": "t2",
+        "initially_scheduled": false,
+        "body": [{ "op": "append", "target": "completed", "value": "t2" }]
+      },
+      {
+        "id": "yield1",
+        "initially_scheduled": false,
+        "body": [{ "op": "schedule" }]
+      },
+      {
+        "id": "nested2",
+        "initially_scheduled": false,
+        "body": [
+          { "op": "spawn", "tasklet": "t3" },
+          { "op": "spawn", "tasklet": "yield2" },
+          { "op": "spawn", "tasklet": "t4" },
+          { "op": "run_tasklet", "tasklet": "t3" }
+        ]
+      },
+      {
+        "id": "t5",
+        "initially_scheduled": false,
+        "body": [{ "op": "append", "target": "completed", "value": "t5" }]
+      },
+      {
+        "id": "t3",
+        "initially_scheduled": false,
+        "body": [{ "op": "append", "target": "completed", "value": "t3" }]
+      },
+      {
+        "id": "yield2",
+        "initially_scheduled": false,
+        "body": [{ "op": "schedule" }]
+      },
+      {
+        "id": "t4",
+        "initially_scheduled": false,
+        "body": [{ "op": "append", "target": "completed", "value": "t4" }]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        { "op": "run_scheduler_n", "count": 1 },
+        { "op": "run_scheduler_n", "count": 1 }
+      ]
+    }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      { "kind": "scheduler.run.start", "limit": 1 },
+      { "kind": "tasklet.observed", "actor": "t1", "value": "t1" },
+      { "kind": "scheduler.run.start", "limit": 1 },
+      { "kind": "tasklet.observed", "actor": "t2", "value": "t2" },
+      { "kind": "tasklet.observed", "actor": "t6", "value": "t6" },
+      { "kind": "tasklet.observed", "actor": "t3", "value": "t3" },
+      { "kind": "tasklet.observed", "actor": "t5", "value": "t5" },
+      { "kind": "tasklet.observed", "actor": "t4", "value": "t4" }
+    ],
+    "match_counts": [
+      { "event": { "kind": "scheduler.run.start" }, "count": 2 },
+      { "event": { "kind": "scheduler.run.start", "limit": 1 }, "count": 2 }
+    ]
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "active_tasklet_count": 1,
+    "all_time_tasklet_count": 11,
+    "completed": ["t1", "t2", "t6", "t3", "t5", "t4"]
+  }
+}

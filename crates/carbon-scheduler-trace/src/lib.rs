@@ -14,6 +14,8 @@ pub struct Fixture {
     pub scenario: Scenario,
     #[serde(default)]
     pub teardown: Option<FixtureTeardown>,
+    #[serde(default)]
+    pub trace_expect: TraceExpect,
     #[serde(default = "default_check_events")]
     pub check_events: bool,
     #[serde(default)]
@@ -30,6 +32,20 @@ pub struct FixtureTeardown {
     pub expect: Value,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TraceExpect {
+    #[serde(default)]
+    pub contains_in_order: Vec<Value>,
+    #[serde(default)]
+    pub match_counts: Vec<TraceMatchCount>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TraceMatchCount {
+    pub event: Value,
+    pub count: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FixtureReport {
     pub name: String,
@@ -38,6 +54,8 @@ pub struct FixtureReport {
     pub expected_events: usize,
     pub generated_events: usize,
     pub final_state_checked: bool,
+    pub trace_expectations_checked: bool,
+    pub trace_expectations: usize,
     pub teardown_checked: bool,
     pub teardown_steps: usize,
     pub invariants_checked: bool,
@@ -105,7 +123,7 @@ pub fn run_fixture_dir(path: impl AsRef<Path>) -> Result<FixtureDirReport> {
         gate: "scheduler-fixtures",
         status,
         report_ready: status == GateStatus::Pass,
-        coverage: "event_or_final_state_checked_event_run_count_calculated_run_count_invariant_checked_scheduler_semantic_fixtures_tasklet_run_bind_setup_rebind_schedule_run_n_timeout_counters_nested_timeout_remainder_scheduled_remove_nested_schedule_multi_level_blocked_yield_scheduler_switch_trap_no_mutation_switch_trap_nested_level_channel_callback_preference_neutral_order_main_side_preference_fixture_teardown_blocked_channel_cleanup_close_clear_pending_teardown_cleanup_exception_throw_closed_channel_deadlock",
+        coverage: "event_or_final_state_checked_trace_expectations_checked_event_run_count_calculated_run_count_invariant_checked_scheduler_semantic_fixtures_tasklet_run_bind_setup_rebind_schedule_run_n_limited_schedule_order_timeout_counters_nested_timeout_remainder_scheduled_remove_nested_schedule_multi_level_blocked_yield_scheduler_switch_trap_no_mutation_switch_trap_nested_level_channel_callback_preference_neutral_order_main_side_preference_fixture_teardown_blocked_channel_cleanup_close_clear_pending_teardown_cleanup_exception_throw_closed_channel_deadlock",
         fixture_count: reports.len(),
         passed,
         failed,
@@ -186,6 +204,8 @@ pub fn run_fixture_path(path: impl AsRef<Path>) -> Result<FixtureReport> {
             );
         }
     }
+    let trace_expectations =
+        validate_trace_expectations(&trace.events, &fixture.trace_expect, &mut differences);
     let invariant_checks =
         validate_trace_invariants(&trace.events, &trace.final_state, &mut differences);
 
@@ -206,6 +226,8 @@ pub fn run_fixture_path(path: impl AsRef<Path>) -> Result<FixtureReport> {
         },
         generated_events: trace.events.len(),
         final_state_checked: !fixture.expect.is_null(),
+        trace_expectations_checked: trace_expectations > 0,
+        trace_expectations,
         teardown_checked: fixture
             .teardown
             .as_ref()
@@ -274,6 +296,54 @@ fn value_contains(actual: &Value, expected: &Value, path: &str, differences: &mu
 
 fn render_value(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| String::from("<unrenderable>"))
+}
+
+fn validate_trace_expectations(
+    events: &[Value],
+    expected: &TraceExpect,
+    differences: &mut Vec<String>,
+) -> usize {
+    let mut checks = 0;
+    let mut next_index = 0usize;
+
+    for (index, expected_event) in expected.contains_in_order.iter().enumerate() {
+        checks += 1;
+        let Some(found_index) = events.iter().enumerate().skip(next_index).find_map(
+            |(candidate_index, actual_event)| {
+                event_matches(actual_event, expected_event).then_some(candidate_index)
+            },
+        ) else {
+            differences.push(format!(
+                "$.trace_expect.contains_in_order[{index}] expected event containing {} after events[{next_index}]",
+                render_value(expected_event)
+            ));
+            continue;
+        };
+        next_index = found_index + 1;
+    }
+
+    for (index, expected_count) in expected.match_counts.iter().enumerate() {
+        checks += 1;
+        let actual_count = events
+            .iter()
+            .filter(|event| event_matches(event, &expected_count.event))
+            .count();
+        if actual_count != expected_count.count {
+            differences.push(format!(
+                "$.trace_expect.match_counts[{index}] expected {} events containing {}, got {actual_count}",
+                expected_count.count,
+                render_value(&expected_count.event)
+            ));
+        }
+    }
+
+    checks
+}
+
+fn event_matches(actual: &Value, expected: &Value) -> bool {
+    let mut differences = Vec::new();
+    value_contains(actual, expected, "$.event", &mut differences);
+    differences.is_empty()
 }
 
 fn validate_trace_invariants(
