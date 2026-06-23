@@ -91,7 +91,7 @@ pub fn run_fixture_dir(path: impl AsRef<Path>) -> Result<FixtureDirReport> {
         gate: "scheduler-fixtures",
         status,
         report_ready: status == GateStatus::Pass,
-        coverage: "event_or_final_state_checked_invariant_checked_scheduler_semantic_fixtures_tasklet_run_bind_setup_rebind_schedule_run_n_timeout_counters_nested_timeout_remainder_scheduled_remove_nested_schedule_multi_level_blocked_yield_scheduler_switch_trap_no_mutation_switch_trap_nested_level_channel_callback_preference_neutral_order_main_side_preference_close_clear_pending_teardown_cleanup_exception_throw_closed_channel_deadlock",
+        coverage: "event_or_final_state_checked_event_run_count_calculated_run_count_invariant_checked_scheduler_semantic_fixtures_tasklet_run_bind_setup_rebind_schedule_run_n_timeout_counters_nested_timeout_remainder_scheduled_remove_nested_schedule_multi_level_blocked_yield_scheduler_switch_trap_no_mutation_switch_trap_nested_level_channel_callback_preference_neutral_order_main_side_preference_close_clear_pending_teardown_cleanup_exception_throw_closed_channel_deadlock",
         fixture_count: reports.len(),
         passed,
         failed,
@@ -239,6 +239,34 @@ fn validate_trace_invariants(
                     .map(|seq| seq.to_string())
                     .unwrap_or_else(|| String::from("<missing>"))
             ));
+        }
+
+        checks += 1;
+        let run_count = event.get("run_count").and_then(Value::as_u64);
+        let calculated_run_count = event.get("calculated_run_count").and_then(Value::as_u64);
+        if run_count != calculated_run_count {
+            differences.push(format!(
+                "$.events[{index}] run_count invariant expected calculated_run_count {}, got {}",
+                calculated_run_count
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| String::from("<missing>")),
+                run_count
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| String::from("<missing>"))
+            ));
+        }
+
+        if let Some(runnable) = event.get("runnable").and_then(Value::as_array) {
+            checks += 1;
+            if run_count != Some(runnable.len() as u64) {
+                differences.push(format!(
+                    "$.events[{index}].run_count invariant expected runnable length {}, got {}",
+                    runnable.len(),
+                    run_count
+                        .map(|count| count.to_string())
+                        .unwrap_or_else(|| String::from("<missing>"))
+                ));
+            }
         }
     }
 

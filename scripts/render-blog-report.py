@@ -698,18 +698,21 @@ def top_line_cards(
     scheduler_summary: dict,
     resource_summary: dict,
     scheduler_rows: list[dict],
+    fixtures_evidence: dict,
 ) -> str:
     mismatch_count = semantic_mismatch_count(scheduler_rows)
     row_count = scheduler_summary["rows"]
+    fixture_passed = fixtures_evidence.get("passed")
+    fixture_count = fixtures_evidence.get("fixture_count")
     return "\n".join(
         [
             metric_card(
                 "Scheduler parity",
                 f"{fmt_int(row_count)}/{fmt_int(row_count)} rows",
-                f"{fmt_int(mismatch_count)} semantic mismatches in matched lab workloads",
+                f"{fmt_int(mismatch_count)} semantic mismatches; {fmt_int(fixture_passed)}/{fmt_int(fixture_count)} semantic fixtures",
             ),
             metric_card(
-                "Scheduler speed",
+                "Scheduler throughput",
                 fmt_directional_ratio(scheduler_summary["median_speedup"]),
                 "median old-vs-Rust wall/throughput result today",
             ),
@@ -727,15 +730,310 @@ def top_line_cards(
     )
 
 
+def native_resource_rows_data(evidence: dict) -> list[dict]:
+    return [
+        row
+        for row in evidence.get("rows", []) or []
+        if row.get("component") == "resources" and row.get("serialization_format")
+    ]
+
+
+def hero_cards(
+    scheduler_summary: dict,
+    resource_summary: dict,
+    scheduler_rows: list[dict],
+    fixtures_evidence: dict,
+    scalability_evidence: dict,
+) -> str:
+    mismatch_count = semantic_mismatch_count(scheduler_rows)
+    native_rows = native_resource_rows_data(scalability_evidence)
+    peak_native_rows = max(
+        (
+            float(row.get("throughput_rows_per_sec"))
+            for row in native_rows
+            if number(row.get("throughput_rows_per_sec")) is not None
+        ),
+        default=None,
+    )
+    return "\n".join(
+        [
+            metric_card(
+                "Scheduler semantics",
+                f"{fmt_int(fixtures_evidence.get('passed'))}/{fmt_int(fixtures_evidence.get('fixture_count'))}",
+                f"{fmt_int(scheduler_summary['rows'])} same-API lab rows; {fmt_int(mismatch_count)} semantic mismatches",
+            ),
+            metric_card(
+                "Scheduler speed today",
+                fmt_directional_ratio(scheduler_summary["median_speedup"]),
+                "median legacy C++ vs Rust bridge through the same Python API",
+            ),
+            metric_card(
+                "Resources same format",
+                fmt_directional_ratio(resource_summary["median_speedup"]),
+                f"median across {resource_summary['rows']} YAML/CSV and local bundle rows",
+            ),
+            metric_card(
+                "Native resource path",
+                fmt_rate(peak_native_rows, "rows"),
+                f"{fmt_int(len(native_rows))} Arrow IPC / Parquet catalog pressure rows",
+            ),
+        ]
+    )
+
+
+def executive_readout_cards(
+    scheduler_summary: dict,
+    resource_summary: dict,
+    scheduler_rows: list[dict],
+    fixtures_evidence: dict,
+    scalability_evidence: dict,
+) -> str:
+    mismatch_count = semantic_mismatch_count(scheduler_rows)
+    native_rows = native_resource_rows_data(scalability_evidence)
+    items = [
+        (
+            "Have we really ported it?",
+            f"The covered scheduler semantics are running through Rust-owned state and pass {fmt_int(fixtures_evidence.get('passed'))}/{fmt_int(fixtures_evidence.get('fixture_count'))} deterministic fixtures. The matched Python API rows also pass with {fmt_int(mismatch_count)} semantic mismatches. The honest boundary is that this is lab evidence, not yet a real game-environment scheduler win.",
+        ),
+        (
+            "What is already better?",
+            f"The resources toolchain is the clean win: Rust is {fmt_directional_ratio(resource_summary['median_speedup'])} median on same-format YAML/CSV and local bundle workflows while preserving parity. That is a like-for-like comparison, not an interface change.",
+        ),
+        (
+            "Where is the scheduler now?",
+            f"The scheduler bridge is semantically credible but slower today: {fmt_directional_ratio(scheduler_summary['median_speedup'])} median across {fmt_int(scheduler_summary['rows'])} matched workloads. That makes performance optimization the next engineering loop, not a victory lap.",
+        ),
+        (
+            "What changed architecturally?",
+            f"The resource catalog now has native Arrow IPC and Parquet pressure rows ({fmt_int(len(native_rows))} sampled). This creates a second path where hot resource interchange can avoid YAML/JSON entirely while compatibility import/export remains available at the edge.",
+        ),
+    ]
+    return "\n".join(
+        f"<article><h3>{h(title)}</h3><p>{h(body)}</p></article>" for title, body in items
+    )
+
+
+def repo_conversion_cards() -> str:
+    items = [
+        (
+            "Scheduler repo",
+            "Covered tasklet, run-queue, channel, and switch-trap behavior is exercised through the same Python scheduler surface against a Rust-owned core. The remaining challenge is performance and production workload coverage.",
+        ),
+        (
+            "Resources repo",
+            "The CLI-compatible Rust path already beats the optimized legacy baseline on the measured YAML/CSV and local bundle operations. The new native path adds Arrow IPC and Parquet catalog storage for non-YAML hot interchange.",
+        ),
+        (
+            "Evidence stance",
+            "Same-interface comparisons and upgraded-interface measurements are reported separately. That keeps the like-for-like claim clean while still showing where modern storage and batch execution can replace dated interchange formats.",
+        ),
+    ]
+    return "\n".join(
+        f"<article><h3>{h(title)}</h3><p>{h(body)}</p></article>" for title, body in items
+    )
+
+
+def scheduler_architecture_signal(workload: str) -> str:
+    if workload.startswith("channel_rendezvous"):
+        return "Channel ordering is equivalent, but handoff overhead still points at wait-queue and bridge-boundary cost."
+    if workload.startswith("runnable_tasklets"):
+        return "Run-queue semantics match, while dense tasklet storage and cheaper queue removal remain the likely speed path."
+    if workload.startswith("fanout_pipeline"):
+        return "Batching channel wakeups and reducing Python boundary touches should come before parallelism."
+    if workload.startswith("zone_tick_study"):
+        return "Separate dense entity work from dispatch before testing SIMD or Rayon."
+    return "Keep semantics green, profile the row, and only promote measured wins."
+
+
+def scheduler_port_rows(rows: list[dict]) -> str:
+    if not rows:
+        return '<tr><td colspan="5">No matched scheduler rows available.</td></tr>'
+    rendered = []
+    for row in sorted(rows, key=lambda item: str(item.get("workload") or "")):
+        workload = str(row.get("workload") or "")
+        title, description = workload_label(workload)
+        speedup = number(row.get("speedup"))
+        parity = row.get("parity_status") or "n/a"
+        mismatch_count = path_value(row, "/semantic/mismatch_count")
+        if mismatch_count is not None:
+            parity = f"{parity}; {fmt_int(mismatch_count)} mismatches"
+        p99_reduction = reduction_percent(
+            path_value(row, "/legacy_sample_stats_us/p99"),
+            path_value(row, "/rust_sample_stats_us/p99"),
+        )
+        rendered.append(
+            "<tr>"
+            f"<td><strong>{h(title)}</strong><small>{h(description)}</small></td>"
+            f"<td><strong>{h(parity)}</strong><small>same Python tasklet/channel API</small></td>"
+            f"<td><strong>{fmt_directional_ratio(speedup)}</strong><small>{fmt_ms_from_us(row.get('legacy_duration_us'))} legacy vs {fmt_ms_from_us(row.get('rust_duration_us'))} Rust</small></td>"
+            f"<td><strong>{fmt_signed_percent(p99_reduction)}</strong><small>{fmt_us(path_value(row, '/legacy_sample_stats_us/p99'))} legacy p99 vs {fmt_us(path_value(row, '/rust_sample_stats_us/p99'))} Rust p99</small></td>"
+            f"<td>{h(scheduler_architecture_signal(workload))}</td>"
+            "</tr>"
+        )
+    return "\n".join(rendered)
+
+
+def resource_surface(workload: str) -> str:
+    if "bundle" in workload or "patch" in workload:
+        return "Local bundle/patch files"
+    if "csv" in workload:
+        return "CSV manifest"
+    return "YAML manifest"
+
+
+def resource_port_rows(rows: list[dict]) -> str:
+    if not rows:
+        return '<tr><td colspan="6">No comparable resource rows available.</td></tr>'
+    rendered = []
+    for row in sorted(rows, key=lambda item: float(item.get("speedup") or 0), reverse=True):
+        workload = str(row.get("workload") or "")
+        title, description = workload_label(workload)
+        p99_reduction = reduction_percent(
+            path_value(row, "/legacy_sample_stats_us/p99"),
+            path_value(row, "/rust_sample_stats_us/p99"),
+        )
+        cpu_reduction = reduction_percent(
+            path_value(row, "/legacy_process_stats/cpu_burn_effective_ms/mean"),
+            path_value(row, "/rust_process_stats/cpu_burn_effective_ms/mean"),
+        )
+        parity = row.get("parity_status") or row.get("claim_eligibility") or "n/a"
+        rendered.append(
+            "<tr>"
+            f"<td><strong>{h(title)}</strong><small>{h(description)}</small></td>"
+            f"<td>{h(resource_surface(workload))}</td>"
+            f"<td><strong>{fmt_directional_ratio(row.get('speedup'))}</strong><small>same legacy-compatible operation</small></td>"
+            f"<td><strong>{fmt_ms_from_us(row.get('legacy_duration_us'))} -> {fmt_ms_from_us(row.get('rust_duration_us'))}</strong><small>legacy wall vs Rust wall</small></td>"
+            f"<td><strong>{fmt_signed_percent(p99_reduction)}</strong><small>p99 tail; CPU burn {fmt_signed_percent(cpu_reduction)}</small></td>"
+            f"<td><small>{h(parity)}</small></td>"
+            "</tr>"
+        )
+    return "\n".join(rendered)
+
+
+def native_resource_cards(scalability_evidence: dict) -> str:
+    rows = native_resource_rows_data(scalability_evidence)
+    formats = sorted({str(row.get("serialization_format") or "") for row in rows})
+    arrow_peak = max(
+        (
+            float(row.get("throughput_rows_per_sec"))
+            for row in rows
+            if row.get("serialization_format") == "arrow_ipc"
+            and number(row.get("throughput_rows_per_sec")) is not None
+        ),
+        default=None,
+    )
+    parquet_peak = max(
+        (
+            float(row.get("throughput_rows_per_sec"))
+            for row in rows
+            if row.get("serialization_format") == "parquet_zstd"
+            and number(row.get("throughput_rows_per_sec")) is not None
+        ),
+        default=None,
+    )
+    return "\n".join(
+        [
+            metric_card(
+                "Columnar formats",
+                fmt_int(len(rows)),
+                ", ".join(format_name.replace("_", " ") for format_name in formats) or "no native rows",
+            ),
+            metric_card(
+                "Arrow IPC peak",
+                fmt_rate(arrow_peak, "rows"),
+                "native in-memory or transport catalog round-trip",
+            ),
+            metric_card(
+                "Parquet/Zstd peak",
+                fmt_rate(parquet_peak, "rows"),
+                "compressed persisted catalog snapshot round-trip",
+            ),
+            metric_card(
+                "YAML/JSON role",
+                "edge only",
+                "compatibility import/export; not the target hot interchange path",
+            ),
+        ]
+    )
+
+
+def architecture_takeaway_cards() -> str:
+    items = [
+        (
+            "Compatibility shell, Rust core",
+            "The scheduler comparison keeps the Python API stable while moving covered state ownership into Rust. That is the right migration shape for a live engine surface: compatibility outside, simpler ownership inside.",
+        ),
+        (
+            "Separate equivalent and upgraded interfaces",
+            "YAML/CSV results answer the like-for-like question. Arrow IPC and Parquet answer a different question: what happens when the replacement is allowed to use a better data contract.",
+        ),
+        (
+            "Columnar data enables real vector work",
+            "SIMD, bitvec masks, and vectorized filters are much more plausible after the data is columnar. The current evidence proves the path exists; it does not yet claim a measured SIMD win.",
+        ),
+        (
+            "Batch before broad parallelism",
+            "Rayon and batch execution are good candidates for independent resource transforms, bundle chunks, catalog filters, and trace analysis. Scheduler control flow should first remove bridge and queue overhead.",
+        ),
+        (
+            "Async is not the scheduler answer",
+            "Tokio can help a future IO/reactor boundary, but it should not replace deterministic tasklet scheduling. Proto is a possible compact control format, not a substitute for Arrow/Parquet resource data.",
+        ),
+        (
+            "Performance loop is measurable",
+            "The new scheduler goal is clear: keep zero mismatches, then beat the legacy rows on the same API before claiming the modernized interface wins separately.",
+        ),
+    ]
+    return "\n".join(
+        f"<article><h3>{h(title)}</h3><p>{h(body)}</p></article>" for title, body in items
+    )
+
+
 def performance_breakdown_cards(
     scheduler_summary: dict,
     resource_summary: dict,
-    scalability_evidence: dict,
+    scheduler_pressure_rows_data: list[dict],
     io_rows_data: list[dict],
 ) -> str:
-    pressure_summary = scalability_evidence.get("summary") or {}
-    pressure_rows_count = path_value(pressure_summary, "/family_counts/scheduler", 0)
-    stable_rows = pressure_summary.get("stable_rows_cv_le_10_percent")
+    pressure_rows_count = len(scheduler_pressure_rows_data)
+    stable_rows = sum(
+        1
+        for row in scheduler_pressure_rows_data
+        if number(path_value(row, "/stability/coefficient_of_variation")) is not None
+        and float(path_value(row, "/stability/coefficient_of_variation")) <= 0.10
+    )
+    peak_operations_per_sec = max(
+        (
+            float(row.get("throughput_operations_per_sec"))
+            for row in scheduler_pressure_rows_data
+            if number(row.get("throughput_operations_per_sec")) is not None
+        ),
+        default=None,
+    )
+    worst_latency_p99_us = max(
+        (
+            float(path_value(row, "/latency_us_extended/p99"))
+            for row in scheduler_pressure_rows_data
+            if number(path_value(row, "/latency_us_extended/p99")) is not None
+        ),
+        default=None,
+    )
+    worst_latency_p99_9_us = max(
+        (
+            float(path_value(row, "/latency_us_extended/p99_9"))
+            for row in scheduler_pressure_rows_data
+            if number(path_value(row, "/latency_us_extended/p99_9")) is not None
+        ),
+        default=None,
+    )
+    highest_peak_rss_kb_p95 = max(
+        (
+            float(path_value(row, "/process_stats/max_rss_kb/p95"))
+            for row in scheduler_pressure_rows_data
+            if number(path_value(row, "/process_stats/max_rss_kb/p95")) is not None
+        ),
+        default=None,
+    )
     io_count = len(io_rows_data)
     return "\n".join(
         [
@@ -756,17 +1054,17 @@ def performance_breakdown_cards(
             ),
             metric_card(
                 "Pressure shape",
-                fmt_rate(pressure_summary.get("peak_operations_per_sec"), "operations"),
+                fmt_rate(peak_operations_per_sec, "operations"),
                 f"{fmt_int(stable_rows)}/{fmt_int(pressure_rows_count)} scheduler rows stable at CV <= 10%",
             ),
             metric_card(
                 "Worst scheduler p99",
-                fmt_us(pressure_summary.get("worst_latency_p99_us")),
-                f"Supplemental core-only pressure matrix; p99.9 {fmt_us(pressure_summary.get('worst_latency_p99_9_us'))}",
+                fmt_us(worst_latency_p99_us),
+                f"Supplemental core-only pressure matrix; p99.9 {fmt_us(worst_latency_p99_9_us)}",
             ),
             metric_card(
                 "Pressure memory",
-                fmt_kb(pressure_summary.get("highest_peak_rss_kb_p95")),
+                fmt_kb(highest_peak_rss_kb_p95),
                 f"p95 peak RSS across {fmt_int(pressure_rows_count)} scheduler pressure rows",
             ),
             metric_card(
@@ -1196,14 +1494,9 @@ def render(evidence_dir: Path) -> str:
         for row in scalability_evidence.get("rows", []) or []
         if row.get("component") == "scheduler"
     ]
-    resource_format_row_data = [
-        row
-        for row in scalability_evidence.get("rows", []) or []
-        if row.get("component") == "resources" and row.get("serialization_format")
-    ]
     io_evidence = optional_json(evidence_dir / "io-workloads.json")
     io_comparison_rows = io_evidence.get("comparisons", []) or []
-    scheduler_gates = gate_items(evidence_dir)
+    fixtures_evidence = optional_json(evidence_dir / "scheduler-fixtures.json")
     scheduler_summary = build_summary(rows)
     resource_summary = build_summary(resource_rows)
     generated = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1320,14 +1613,14 @@ def render(evidence_dir: Path) -> str:
       grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
       gap: 12px;
     }
-    .metric, .panel, .arch-grid article, .tested-grid article, .callout {
+    .metric, .panel, .arch-grid article, .tested-grid article, .story-grid article, .callout {
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: 0 1px 2px rgba(23, 32, 42, 0.04);
     }
     .metric { padding: 15px; }
-    .metric, .panel, .arch-grid article, .tested-grid article, .callout, .table-wrap {
+    .metric, .panel, .arch-grid article, .tested-grid article, .story-grid article, .callout, .table-wrap {
       max-width: 100%;
     }
     .metric span {
@@ -1363,12 +1656,14 @@ def render(evidence_dir: Path) -> str:
       color: var(--muted);
     }
     .callout strong { color: var(--ink); }
-    .arch-grid, .tested-grid {
+    .arch-grid, .tested-grid, .story-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 12px;
     }
-    .arch-grid article, .tested-grid article { padding: 16px; }
+    .arch-grid article, .tested-grid article, .story-grid article { padding: 16px; }
+    .story-grid article p,
+    .arch-grid article p { color: var(--muted); }
     .tested-grid ul { margin: 0; padding-left: 18px; }
     .tested-grid li + li { margin-top: 8px; }
     .tested-grid span { display: block; color: var(--muted); }
@@ -1432,6 +1727,20 @@ def render(evidence_dir: Path) -> str:
       font-size: 0.9rem;
     }
     .methodology p { overflow-wrap: anywhere; }
+    details {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin-top: 12px;
+      padding: 14px 16px;
+    }
+    details[open] { padding-bottom: 16px; }
+    summary {
+      cursor: pointer;
+      font-weight: 800;
+      color: var(--ink);
+    }
+    summary + * { margin-top: 12px; }
     @media (max-width: 820px) {
       .hero { padding: 32px 18px 24px; }
       main { padding: 22px 18px 44px; }
@@ -1456,11 +1765,11 @@ def render(evidence_dir: Path) -> str:
 <body>
   <header>
     <div class="hero">
-      <p class="eyebrow">Carbon scheduler rewrite evidence</p>
-      <h1>Carbon scheduler parity is green in the lab; performance work remains.</h1>
-      <p class="lead">This report is scheduler-first. It compares matched pressure rows for the legacy C++ scheduler extension and the Rust scheduler bridge through the same Python tasklet/channel API, then keeps supplemental Rust-core-only pressure evidence separate.</p>
+      <p class="eyebrow">Carbon port evidence</p>
+      <h1>Carbon scheduler semantics are ported in the lab; resources are faster today.</h1>
+      <p class="lead">This report separates the converted repositories and separates like-for-like claims from upgraded-interface evidence. Scheduler parity is now measurable through the same Python API, but the Rust bridge still needs optimization before it can claim to beat the legacy implementation.</p>
       <div class="metric-grid">
-        $top_line_cards
+        $hero_cards
       </div>
     </div>
   </header>
@@ -1469,192 +1778,55 @@ def render(evidence_dir: Path) -> str:
       <div>
         <div class="section-head">
           <div>
-            <h2>Measured Breakdown</h2>
-            <p>Use this as the stats read: scheduler comparison first, resource wins second, and pressure/IO evidence called out as non-comparable where appropriate.</p>
+            <h2>Executive Readout</h2>
+            <p>The evidence is strongest when the claim boundary is explicit: what is ported, what is faster under the same interface, and what improves once the data contract is modernized.</p>
           </div>
           <span class="tag">Generated $generated</span>
         </div>
-        <div class="metric-grid">
-          $breakdown_cards
+        <div class="story-grid">
+          $executive_readout
         </div>
       </div>
       <aside class="panel">
-        <h2>What Changed</h2>
+        <h2>Claim Boundary</h2>
         <ul>
-          <li>The scheduler path under test keeps the legacy Python API, but routes covered run-queue, tasklet, channel, and switch-trap decisions through Rust-owned scheduler state.</li>
-          <li>Each matched pressure row records semantic checksum parity plus throughput, p99/p99.9 latency, CPU p95, peak RSS p95, and throughput CV.</li>
-          <li>The next production gate is a real game-environment scheduler workload; the pressure table is lab orchestration evidence, not a production claim.</li>
+          <li>Scheduler: covered semantics are ported and passing in lab evidence, but current same-API performance is slower than legacy C++.</li>
+          <li>Resources: same-format YAML/CSV and local bundle operations are already faster in Rust with parity evidence.</li>
+          <li>Modernized resources: Arrow IPC and Parquet are measured as a second path, not mixed into same-interface speedup claims.</li>
         </ul>
       </aside>
     </section>
 
     <section>
       <div class="callout">
-        <strong>Bottom line:</strong> this is no longer a file-copy benchmark or a Rust-language claim. The scheduler question is whether tasklet orchestration becomes cheaper, more predictable, and easier to scale across domains. Today the parity harness exists and shows zero semantic mismatches in the lab rows; the measured bridge still needs optimization before speedup claims.
+        <strong>Bottom line:</strong> the conversion is credible, but the story is not uniform. The resources port already has like-for-like wins. The scheduler port has semantic evidence and a working comparison harness; the next loop has to make the Rust bridge robustly faster on the same API before any stronger scheduler claim is made.
+      </div>
+    </section>
+
+    <section>
+      <h2>Repo Conversion Map</h2>
+      <div class="story-grid">
+        $repo_conversion
       </div>
     </section>
 
     <section>
       <div class="section-head">
         <div>
-          <h2>Current Scheduler Regressions</h2>
-          <p>Rows are sorted from worst to least bad. These are the first optimization targets before any stronger scheduler performance claim.</p>
+          <h2>Scheduler Port</h2>
+          <p>Legacy C++ scheduler extension vs Rust scheduler bridge through the same Python tasklet/channel API. This answers whether the port is semantically credible under equivalent use, and where the Rust bridge still loses time.</p>
         </div>
-        <span class="tag">Fix first</span>
+        <span class="tag">Same interface</span>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th>Workload</th>
-              <th>Current ratio</th>
-              <th>p99 tail</th>
-              <th>CPU burn</th>
-              <th>First optimization target</th>
-            </tr>
-          </thead>
-          <tbody>
-            $scheduler_regressions
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section>
-      <div class="section-head">
-        <div>
-          <h2>Performance Optimization Loop</h2>
-          <p>Every architecture change is tied to parity, row-level evidence, and a rollback decision.</p>
-        </div>
-        <span class="tag">Decision gate</span>
-      </div>
-      <div class="arch-grid">
-        $optimization_loop
-      </div>
-    </section>
-
-    <section>
-      <div class="section-head">
-        <div>
-          <h2>Native Resource Data Path</h2>
-          <p>The new resource lane replaces manifest-shaped YAML/CSV movement with typed Arrow record batches, Arrow IPC transport, and Parquet/Zstd persistence. These rows are data-format pressure evidence, not legacy C++ speedup claims.</p>
-        </div>
-        <span class="tag">No YAML/JSON hot path</span>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Format</th>
-              <th>Records</th>
-              <th>Rows/sec</th>
-              <th>Bytes/sec</th>
-              <th>p99 latency</th>
-              <th>Peak RSS</th>
-              <th>Boundary</th>
-            </tr>
-          </thead>
-          <tbody>
-            $resource_format_rows
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section>
-      <div class="section-head">
-        <div>
-          <h2>Technology Fit</h2>
-          <p>These choices are constrained by the evidence path: use the right tool where it moves a measured bottleneck.</p>
-        </div>
-        <span class="tag">Architecture</span>
-      </div>
-      <div class="arch-grid">
-        $technology_fit
-      </div>
-    </section>
-
-    <section>
-      <div class="section-head">
-        <div>
-          <h2>Scheduler Evidence Status</h2>
-          <p>The scheduler repo remains the focus. These cards show the parity base behind the performance table.</p>
-        </div>
-        <span class="tag">Scheduler repo</span>
-      </div>
-      <div class="metric-grid">
-        $evidence_status_cards
-      </div>
-    </section>
-
-    <section>
-      <h2>Architecture Change</h2>
-      <div class="arch-grid">
-        $architecture
-      </div>
-    </section>
-
-    <section>
-      <div class="section-head">
-        <div>
-          <h2>Scheduler Validation Gate</h2>
-          <p>What can be said now, and what remains open before broad production claims.</p>
-        </div>
-        <span class="tag">Claim boundary</span>
-      </div>
-      <div class="arch-grid">
-        $scheduler_story
-      </div>
-    </section>
-
-    <section>
-      <h2>Scheduler Gate Detail</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Gate</th>
-              <th>Status</th>
-              <th>Report ready</th>
-              <th>Coverage</th>
-              <th>Remaining blocker</th>
-            </tr>
-          </thead>
-          <tbody>
-            $scheduler_gate_rows
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section>
-      <h2>What Was Tested</h2>
-      <div class="tested-grid">
-        $tested_workloads
-      </div>
-    </section>
-
-    <section>
-      <div class="section-head">
-        <div>
-          <h2>Comparable Pressure</h2>
-          <p>Matched legacy C++ scheduler extension vs Rust scheduler bridge. Same Python tasklet/channel API, exact pressure workload set, release-native Rust build, zero semantic mismatches in accepted rows.</p>
-        </div>
-        <span class="tag">Lab-only speedup</span>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Pressure</th>
-              <th>Speedup</th>
-              <th>Throughput</th>
-              <th>p99 latency</th>
-              <th>p99.9 latency</th>
-              <th>CPU p95</th>
-              <th>Peak RSS p95</th>
-              <th>Stability</th>
-              <th>Parity</th>
+              <th>Port evidence</th>
+              <th>Same-API result</th>
+              <th>Tail latency</th>
+              <th>Architecture signal</th>
             </tr>
           </thead>
           <tbody>
@@ -1667,10 +1839,10 @@ def render(evidence_dir: Path) -> str:
     <section>
       <div class="section-head">
         <div>
-          <h2>Resources CLI Results</h2>
-          <p>Separate from scheduler work: optimized legacy resources CLI vs Rust release-native resource commands.</p>
+          <h2>Resources Port</h2>
+          <p>Optimized legacy resources CLI vs Rust release-native resource commands using the same YAML/CSV manifests and local bundle or patch surfaces. This is the direct like-for-like comparison.</p>
         </div>
-        <span class="tag">Resources comparison</span>
+        <span class="tag">Same format</span>
       </div>
       <div class="metric-grid">
         $resource_cards
@@ -1680,12 +1852,10 @@ def render(evidence_dir: Path) -> str:
           <thead>
             <tr>
               <th>Workload</th>
-              <th>Wall latency</th>
-              <th>p50 latency</th>
-              <th>p99 tail</th>
-              <th>Throughput</th>
-              <th>CPU burn</th>
-              <th>Peak memory</th>
+              <th>Compatibility surface</th>
+              <th>Same-format result</th>
+              <th>Wall time</th>
+              <th>Tail and CPU</th>
               <th>Parity</th>
             </tr>
           </thead>
@@ -1699,11 +1869,53 @@ def render(evidence_dir: Path) -> str:
     <section>
       <div class="section-head">
         <div>
-          <h2>Supplemental Core Pressure</h2>
-          <p>Rust scheduler-core evidence only. These rows are kept for scaling shape and tail behavior, but they are not old-vs-Rust speedups.</p>
+          <h2>Modernized Resource Path</h2>
+          <p>The second resource path removes YAML/JSON from hot catalog interchange and measures native Rust Arrow IPC and Parquet/Zstd catalog round-trips. These rows are intentionally not mixed into legacy CLI speedup claims.</p>
         </div>
-        <span class="tag">Not comparable</span>
+        <span class="tag">Upgraded interface</span>
       </div>
+      <div class="metric-grid">
+        $native_resource_cards
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table>
+          <thead>
+            <tr>
+              <th>Format</th>
+              <th>Rows</th>
+              <th>Rows/sec</th>
+              <th>Bytes/sec</th>
+              <th>p99 latency</th>
+              <th>Peak RSS p95</th>
+              <th>Claim scope</th>
+            </tr>
+          </thead>
+          <tbody>
+            $native_resource_rows
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Architecture Takeaways</h2>
+      <div class="arch-grid">
+        $architecture_takeaways
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>Evidence Appendix</h2>
+          <p>Raw supporting rows are kept here so the main report stays focused on converted repo outcomes and claim boundaries.</p>
+        </div>
+        <span class="tag">Details</span>
+      </div>
+
+      <details>
+        <summary>Rust-only scheduler pressure rows</summary>
+        <p>These rows show scaling shape and tail behavior in Rust scheduler-core only. They are not old-vs-Rust speedup claims.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -1722,16 +1934,11 @@ def render(evidence_dir: Path) -> str:
           </tbody>
         </table>
       </div>
-    </section>
+      </details>
 
-    <section>
-      <div class="section-head">
-        <div>
-          <h2>IO And Network Loopback Rows</h2>
-          <p>Socket/TLS request, byte, CPU, and memory stats are included for completeness. They are not legacy Carbon IO comparisons yet.</p>
-        </div>
-        <span class="tag">Not legacy comparable</span>
-      </div>
+      <details>
+        <summary>IO and network loopback rows</summary>
+        <p>Socket/TLS request, byte, CPU, and memory stats are included for completeness. They are not legacy Carbon IO comparisons yet.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -1750,16 +1957,17 @@ def render(evidence_dir: Path) -> str:
           </tbody>
         </table>
       </div>
-    </section>
+      </details>
 
-    <section class="panel">
-      <h2>Methodology</h2>
+      <details>
+        <summary>Methodology and evidence files</summary>
       <div class="methodology">
         $methodology
         $resources_methodology
         <p><strong>Scheduler pressure evidence</strong><br>$scalability_evidence_path</p>
         <p><strong>IO loopback evidence</strong><br>$io_evidence_path</p>
       </div>
+      </details>
     </section>
   </main>
 </body>
@@ -1767,29 +1975,28 @@ def render(evidence_dir: Path) -> str:
 """
     )
     return page.safe_substitute(
-        top_line_cards=top_line_cards(scheduler_summary, resource_summary, rows),
-        breakdown_cards=performance_breakdown_cards(
+        hero_cards=hero_cards(
             scheduler_summary,
             resource_summary,
-            scalability_evidence,
-            io_comparison_rows,
-        ),
-        resource_cards=summary_cards(resource_summary, subject="Resources"),
-        scheduler_regressions=scheduler_regression_rows(rows),
-        optimization_loop=optimization_loop_section(),
-        resource_format_rows=resource_format_rows(resource_format_row_data),
-        technology_fit=technology_fit_section(),
-        evidence_status_cards=evidence_status_cards(evidence_dir),
-        architecture=architecture_section(),
-        scheduler_story=scheduler_story_section(scheduler_gates),
-        scheduler_gate_rows=scheduler_gate_rows(scheduler_gates),
-        tested_workloads=tested_workloads(rows + resource_rows),
-        scheduler_rows=scheduler_pressure_comparison_rows(
             rows,
+            fixtures_evidence,
+            scalability_evidence,
         ),
-        resource_rows=comparison_table_rows(
-            resource_rows,
-            empty_text="No comparable resource rows available.",
+        executive_readout=executive_readout_cards(
+            scheduler_summary,
+            resource_summary,
+            rows,
+            fixtures_evidence,
+            scalability_evidence,
+        ),
+        repo_conversion=repo_conversion_cards(),
+        resource_cards=summary_cards(resource_summary, subject="Resources"),
+        native_resource_cards=native_resource_cards(scalability_evidence),
+        architecture_takeaways=architecture_takeaway_cards(),
+        scheduler_rows=scheduler_port_rows(rows),
+        resource_rows=resource_port_rows(resource_rows),
+        native_resource_rows=resource_format_rows(
+            scalability_evidence.get("rows", []) or []
         ),
         pressure_rows=pressure_rows(scheduler_pressure_rows),
         io_rows=io_rows(io_comparison_rows),

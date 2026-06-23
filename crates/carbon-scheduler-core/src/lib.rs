@@ -3231,6 +3231,13 @@ impl Runtime {
         for (key, value) in fields {
             event.insert(key.into(), value);
         }
+        event
+            .entry(String::from("run_count"))
+            .or_insert_with(|| json!(self.run_count()));
+        event.insert(
+            String::from("calculated_run_count"),
+            json!(self.calculated_run_count()),
+        );
         self.events.push(Value::Object(event));
         self.seq += 1;
     }
@@ -3239,6 +3246,10 @@ impl Runtime {
         let mut root = Map::new();
         root.insert(String::from("current"), json!(self.current));
         root.insert(String::from("run_count"), json!(self.run_count()));
+        root.insert(
+            String::from("calculated_run_count"),
+            json!(self.calculated_run_count()),
+        );
         root.insert(
             String::from("switch_trap_level"),
             json!(self.switch_trap_level),
@@ -3406,6 +3417,14 @@ impl Runtime {
 
     fn run_count(&self) -> usize {
         self.runnable.len()
+    }
+
+    fn calculated_run_count(&self) -> usize {
+        1 + self
+            .tasklets
+            .values()
+            .filter(|tasklet| tasklet.scheduled)
+            .count()
     }
 
     fn has_runnable_tasklets(&self) -> bool {
@@ -4252,7 +4271,14 @@ mod tests {
 
         let trace = run_scenario(&scenario).expect("scenario runs");
         assert_eq!(trace.final_state["run_count"], json!(1));
+        assert_eq!(trace.final_state["calculated_run_count"], json!(1));
         assert_eq!(trace.final_state["completed"], json!(["t1", "t2"]));
         assert_eq!(trace.final_state["tasklets"]["t1"]["alive"], json!(false));
+        for event in &trace.events {
+            assert_eq!(
+                event["run_count"], event["calculated_run_count"],
+                "event run_count should match calculated_run_count: {event}"
+            );
+        }
     }
 }
