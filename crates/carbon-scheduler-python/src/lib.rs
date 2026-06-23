@@ -764,7 +764,7 @@ impl Tasklet {
     #[setter]
     fn set_block_trap(&mut self, value: bool) {
         self.block_trap = value;
-        self.sync_core_state();
+        bridge_core_set_tasklet_block_trap(self.core_id, value);
     }
 
     #[getter]
@@ -1011,12 +1011,13 @@ impl Tasklet {
         if slf.is_main {
             return Ok(tasklet);
         }
-        if slf.blocked {
+        let snapshot = slf.core_snapshot()?;
+        if snapshot.blocked_on.is_some() {
             return Err(PyRuntimeError::new_err(
                 "Failed to insert tasklet: Cannot insert blocked tasklet",
             ));
         }
-        if !slf.alive {
+        if !snapshot.alive {
             return Err(PyRuntimeError::new_err(
                 "Failed to insert tasklet: Cannot insert dead tasklet",
             ));
@@ -1024,7 +1025,7 @@ impl Tasklet {
         if slf.callable.is_none() {
             return Err(PyRuntimeError::new_err("tasklet has no callable"));
         }
-        if !slf.scheduled {
+        if !snapshot.scheduled {
             slf.alive = true;
             slf.paused = false;
             slf.scheduled = true;
@@ -1228,12 +1229,13 @@ impl Tasklet {
 
     fn run(slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<()> {
         ensure_switch_allowed()?;
-        if !slf.alive {
+        let snapshot = slf.core_snapshot()?;
+        if !snapshot.alive {
             return Err(PyRuntimeError::new_err(
                 "Cannot run tasklet that is not alive (dead)",
             ));
         }
-        if slf.blocked {
+        if snapshot.blocked_on.is_some() {
             return Err(PyRuntimeError::new_err(
                 "Cannot run tasklet that is blocked",
             ));
@@ -1247,10 +1249,11 @@ impl Tasklet {
     }
 
     fn switch(slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<()> {
-        if !slf.alive {
+        let snapshot = slf.core_snapshot()?;
+        if !snapshot.alive {
             return Err(PyRuntimeError::new_err("tasklet is dead"));
         }
-        if slf.blocked {
+        if snapshot.blocked_on.is_some() {
             return Err(PyRuntimeError::new_err("tasklet is blocked"));
         }
         ensure_switch_allowed()?;
@@ -4138,7 +4141,7 @@ fn current_tasklet_block_trap(py: Python<'_>) -> PyResult<bool> {
         .downcast::<Tasklet>()
         .map_err(|_| PyTypeError::new_err("expected scheduler.tasklet"))?
         .try_borrow()?;
-    Ok(current.block_trap)
+    Ok(current.core_snapshot()?.block_trap)
 }
 
 fn set_tasklet_paused(py: Python<'_>, tasklet_object: &PyObject, paused: bool) {
@@ -4455,12 +4458,13 @@ fn insert_tasklet_object(py: Python<'_>, tasklet_object: PyObject) -> PyResult<(
         if tasklet.is_main {
             return Ok(());
         }
-        if tasklet.blocked {
+        let snapshot = tasklet.core_snapshot()?;
+        if snapshot.blocked_on.is_some() {
             return Err(PyRuntimeError::new_err(
                 "Failed to insert tasklet: Cannot insert blocked tasklet",
             ));
         }
-        if !tasklet.alive {
+        if !snapshot.alive {
             return Err(PyRuntimeError::new_err(
                 "Failed to insert tasklet: Cannot insert dead tasklet",
             ));
@@ -4468,7 +4472,7 @@ fn insert_tasklet_object(py: Python<'_>, tasklet_object: PyObject) -> PyResult<(
         if tasklet.callable.is_none() {
             return Err(PyRuntimeError::new_err("tasklet has no callable"));
         }
-        if tasklet.scheduled {
+        if snapshot.scheduled {
             false
         } else {
             tasklet.paused = false;
@@ -4971,10 +4975,13 @@ extern "C" fn c_api_py_tasklet_get_block_trap(tasklet: *mut ffi::PyObject) -> i3
     Python::with_gil(|py| {
         borrowed_any_from_ptr(py, tasklet)
             .and_then(|object| {
-                object
-                    .downcast::<Tasklet>()
-                    .ok()
-                    .and_then(|tasklet| tasklet.try_borrow().ok().map(|tasklet| tasklet.block_trap))
+                object.downcast::<Tasklet>().ok().and_then(|tasklet| {
+                    tasklet
+                        .try_borrow()
+                        .ok()
+                        .and_then(|tasklet| tasklet.core_snapshot().ok())
+                        .map(|snapshot| snapshot.block_trap)
+                })
             })
             .map_or(0, i32::from)
     })
@@ -4987,7 +4994,7 @@ extern "C" fn c_api_py_tasklet_set_block_trap(tasklet: *mut ffi::PyObject, value
         {
             if let Ok(mut tasklet) = tasklet.try_borrow_mut() {
                 tasklet.block_trap = value != 0;
-                tasklet.sync_core_state();
+                bridge_core_set_tasklet_block_trap(tasklet.core_id, tasklet.block_trap);
             }
         }
     });
@@ -6722,11 +6729,14 @@ tasklet.block_trap = True
             py.run_bound(
                 r#"
 assert tasklet.block_trap is True
+before_insert = scheduler.getruncount()
+tasklet.insert()
+assert scheduler.getruncount() == before_insert
 "#,
                 Some(&locals),
                 Some(&locals),
             )
-            .expect("block_trap getter should remain core-authoritative after setter sync");
+            .expect("block_trap getter and insert guard should read core-authoritative state");
 
             py.run_bound(
                 r#"
@@ -6753,6 +6763,11 @@ assert receiver.blocked is True
             py.run_bound(
                 r#"
 assert receiver.blocked is True
+try:
+    receiver.run()
+    raise AssertionError("core-blocked tasklet run unexpectedly succeeded")
+except RuntimeError as exc:
+    assert "blocked" in str(exc)
 channel.clear()
 "#,
                 Some(&locals),
@@ -8433,6 +8448,11 @@ def record(value):
             assert_eq!(alive(tasklet.as_ptr()), 0);
             assert_eq!(get_block_trap(tasklet.as_ptr()), 0);
             set_block_trap(tasklet.as_ptr(), 1);
+            assert_eq!(get_block_trap(tasklet.as_ptr()), 1);
+            {
+                let tasklet_ref = tasklet.bind(py).downcast::<Tasklet>().unwrap();
+                tasklet_ref.try_borrow_mut().unwrap().block_trap = false;
+            }
             assert_eq!(get_block_trap(tasklet.as_ptr()), 1);
             assert!(tasklet
                 .bind(py)

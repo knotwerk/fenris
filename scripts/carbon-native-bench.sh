@@ -32,7 +32,7 @@ case "${command}" in
   all | native-evidence)
     run_xtask bench "$@"
     run_xtask bench-scheduler-comparison --workload-set all --tier quick --samples 10
-    run_xtask bench-scalability --tier quick --families scheduler,io,data --samples 5
+    run_xtask bench-scalability --tier quick --families scheduler,native-scheduler,io,data --samples 5
     run_xtask io-workloads "$@"
     run_xtask report-progress
     ;;

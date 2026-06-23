@@ -20,7 +20,7 @@ use carbon_resources_core::{
     ResourceRecord,
 };
 use carbon_scheduler_core::{
-    run_scenario, ChannelSpec, Entrypoint, Operation, Scenario, TaskletSpec,
+    run_scenario, ChannelSpec, CoreScheduler, Entrypoint, Operation, Scenario, TaskletSpec,
 };
 use carbon_scheduler_trace::{assert_report_pass, run_fixture_dir};
 use serde_json::{json, Value};
@@ -2179,12 +2179,12 @@ fn rust_scheduler_python() -> Result<()> {
                 "CoreScheduler now owns scheduler switch-trap depth per owner run queue and the live PyO3 bridge routes switch_trap() plus trapped schedule/run/channel/switch/raise/kill guards through that core state",
                 "live PyO3 tasklet/channel objects now carry opaque CoreTaskletId/CoreChannelId handles, mirror unbuffered channel balance, preference, block-trap, and blocked sender/receiver queue transitions through CoreScheduler, consume CoreChannelOperationResult sender/receiver IDs, core-minted payload handoff tokens, preferred peer-immediate handoff, and balance for covered unbuffered send/receive transfer decisions, use CoreScheduler snapshots for the sender-preferred pre-receive scheduling probe, and use CoreScheduler queue-front results for channel.queue introspection while preserving bridge-local Python payload object storage",
                 "live PyO3 tasklet objects now mirror alive/scheduled/paused/times_switched_to through CoreScheduler tasklet snapshots for setup, run, finish, block, continuation, clear, and kill/exception paths covered by bridge tests; covered bind/remove/insert/switch pause paths use explicit CoreScheduler pause/resume transitions, direct tasklet.run paused eligibility consults the core paused snapshot, and blocked receive/send throw cleanup resolves blocked channel/direction from CoreScheduler snapshots instead of tasklet-local channel pointers",
-                "Python-visible tasklet alive/blocked/scheduled/paused/block_trap/times_switched_to properties and the C API times_switched_to getter now read CoreScheduler snapshots, including the legacy transient current-tasklet scheduled flag during scheduler.schedule()",
+                "Python-visible tasklet alive/blocked/scheduled/paused/block_trap/times_switched_to properties, the public tasklet insert/run/switch invalid-state guards, the current-tasklet block_trap guard used by channel operations, and the C API times_switched_to/block_trap getters now read CoreScheduler snapshots, including the legacy transient current-tasklet scheduled flag during scheduler.schedule()",
                 "Python-visible channel preference/closing/closed properties now read CoreScheduler snapshots, while core-owned payload tokens select bridge-local Python payload objects for send/receive, exception replay, and blocked-sender cleanup paths",
                 "FFI crate owns ABI status/version and panic-containment bootstrap"
             ],
             "still_bridge_owned": [
-                "Python tasklet object still stores callable/args/kwargs, Greenlet continuation state, pending exceptions, kill/continuation flags, compatibility metrics, and PyObject identity registries needed for callable execution; CoreScheduler snapshots are not yet authoritative for every lifecycle transition",
+                "Python tasklet object still stores callable/args/kwargs, Greenlet continuation state, pending exceptions, kill/continuation flags, compatibility metrics, and PyObject identity registries needed for callable execution; CoreScheduler snapshots are not yet authoritative for every lifecycle transition beyond the covered public insert/run/switch guards",
                 "Python channel object still stores live Python payload/exception objects, pending message close-state details, and PyObject registries for legacy identity adaptation even though covered unbuffered transfer selection, payload-token handoff/removal identity, immediate peer handoff, queue-front selection, and scheduler run-queue order now come from CoreScheduler results",
                 "Python schedule/channel callbacks and refcount/GC/weakref cleanup remain bridge-local"
             ],
@@ -4991,7 +4991,7 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
         .any(|arg| arg.as_str() == "--help" || arg.as_str() == "-h")
     {
         println!(
-            "usage: xtask bench-scalability [--tier quick|full] [--families scheduler,io,data] [--samples N] [--output path]"
+            "usage: xtask bench-scalability [--tier quick|full] [--families scheduler,native-scheduler,io,data] [--samples N] [--output path]"
         );
         return Ok(());
     }
@@ -5021,6 +5021,19 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
                 Ok(row) => rows.push(row),
                 Err(error) => failures.push(json!({
                     "family": "scheduler",
+                    "workload": spec.workload,
+                    "error": error.to_string()
+                })),
+            }
+        }
+    }
+
+    if config.families.contains("native-scheduler") {
+        for spec in scalability_native_scheduler_specs(config.tier) {
+            match run_scalability_xtask_worker_samples(&current_exe, &spec, config.samples) {
+                Ok(row) => rows.push(row),
+                Err(error) => failures.push(json!({
+                    "family": "native-scheduler",
                     "workload": spec.workload,
                     "error": error.to_string()
                 })),
@@ -5064,6 +5077,13 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             )
         })
         .count();
+    let native_scheduler_rows = rows
+        .iter()
+        .filter(|row| {
+            row.get("family").and_then(Value::as_str) == Some("native-scheduler")
+                && row.get("no_python_hot_path").and_then(Value::as_bool) == Some(true)
+        })
+        .count();
     let mut remaining_before_report_ready = vec![
         String::from("add comparable legacy scheduler process pressure rows before claiming scheduler speedups"),
         String::from("add captured legacy Carbon IO rows before claiming Carbon IO speedups"),
@@ -5074,6 +5094,14 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             2,
             String::from(
                 "sample native Arrow IPC and Parquet resource catalog rows with --families data before making data-format conclusions",
+            ),
+        );
+    }
+    if native_scheduler_rows == 0 {
+        remaining_before_report_ready.insert(
+            0,
+            String::from(
+                "sample native no-Python scheduler kernel rows with --families native-scheduler before discussing target-architecture scheduler upside",
             ),
         );
     }
@@ -5098,7 +5126,7 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             config.families.iter().cloned().collect::<Vec<_>>().join(","),
             config.samples
         ),
-        "recommended_blog_command": "scripts/carbon-native-bench.sh bench-scalability --tier quick --families scheduler,io,data --samples 5",
+        "recommended_blog_command": "scripts/carbon-native-bench.sh bench-scalability --tier quick --families scheduler,native-scheduler,io,data --samples 5",
         "duration_ms": started.elapsed().as_millis() as u64,
         "host": {
             "os": env::consts::OS,
@@ -5123,12 +5151,18 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             "formats": ["arrow_ipc", "parquet_zstd"],
             "reason": "ResourceCatalog now has a concrete Arrow record-batch backend with Arrow IPC and Parquet/Zstd round-trips. These rows measure native Rust data-format pressure only; they are not legacy C++ speedup claims."
         },
+        "native_scheduler_scope": {
+            "status": if native_scheduler_rows > 0 { "native_no_python_scheduler_rows_sampled" } else { "native_no_python_scheduler_rows_not_sampled" },
+            "row_count": native_scheduler_rows,
+            "reason": "Native scheduler rows exercise CoreScheduler directly with Rust-owned tasklets, channels, run queues, and domain-style wakeups. They intentionally remove Python, Greenlet, PyO3, and refcount work from the hot path, so they are target-architecture probes rather than same-API legacy comparisons."
+        },
         "summary": scalability_summary(&rows),
         "rows": rows,
         "failures": failures,
         "covered_behaviors": [
             "scheduler runnable tasklet pressure using generated CoreScheduler semantic scenarios",
             "scheduler blocked receiver wake pressure using generated channel-pair scenarios",
+            "native no-Python CoreScheduler kernel pressure for runnable drain, channel rendezvous, and domain-style wakeups",
             "loopback TCP and TLS payload/concurrency pressure with request latency and network MB/sec",
             "Rust data pipeline pressure for checksum/compression and catalog export/parse rows",
             "process resource metrics for every row when /usr/bin/time -v is available"
@@ -5157,7 +5191,7 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
 
 fn parse_bench_scalability_args(args: Vec<String>) -> Result<ScalabilityConfig> {
     let mut tier = ScalabilityTier::Quick;
-    let mut families = ["scheduler", "io", "data"]
+    let mut families = ["scheduler", "native-scheduler", "io", "data"]
         .into_iter()
         .map(String::from)
         .collect::<BTreeSet<_>>();
@@ -5203,7 +5237,7 @@ fn parse_bench_scalability_args(args: Vec<String>) -> Result<ScalabilityConfig> 
             }
             "--help" | "-h" => {
                 println!(
-                    "usage: xtask bench-scalability [--tier quick|full] [--families scheduler,io,data] [--samples N] [--output path]"
+                    "usage: xtask bench-scalability [--tier quick|full] [--families scheduler,native-scheduler,io,data] [--samples N] [--output path]"
                 );
                 return Ok(ScalabilityConfig {
                     tier,
@@ -5239,7 +5273,7 @@ fn parse_scalability_families(value: &str) -> Result<BTreeSet<String>> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        if !matches!(family, "scheduler" | "io" | "data") {
+        if !matches!(family, "scheduler" | "native-scheduler" | "io" | "data") {
             bail!("unsupported bench-scalability family: {family}");
         }
         families.insert(family.to_string());
@@ -5298,6 +5332,40 @@ fn scalability_scheduler_specs(tier: ScalabilityTier) -> Vec<ScalabilityWorkerSp
             args: vec![
                 OsString::from("bench-scalability-worker"),
                 OsString::from("scheduler"),
+                OsString::from(kind),
+                OsString::from(count.to_string()),
+                OsString::from(iterations.to_string()),
+            ],
+        })
+        .collect()
+}
+
+fn scalability_native_scheduler_specs(tier: ScalabilityTier) -> Vec<ScalabilityWorkerSpec> {
+    let cases = match tier {
+        ScalabilityTier::Quick => vec![
+            ("native-runnable-drain", 1_024_u64, 200_u64),
+            ("native-runnable-drain", 16_384, 20),
+            ("native-channel-rendezvous", 1_024, 100),
+            ("native-domain-wakeups", 4_096, 80),
+        ],
+        ScalabilityTier::Full => vec![
+            ("native-runnable-drain", 1_024_u64, 800_u64),
+            ("native-runnable-drain", 16_384, 100),
+            ("native-runnable-drain", 65_536, 20),
+            ("native-channel-rendezvous", 1_024, 500),
+            ("native-channel-rendezvous", 16_384, 50),
+            ("native-domain-wakeups", 4_096, 400),
+            ("native-domain-wakeups", 65_536, 40),
+        ],
+    };
+
+    cases
+        .into_iter()
+        .map(|(kind, count, iterations)| ScalabilityWorkerSpec {
+            workload: format!("native_scheduler_{kind}_{count}"),
+            args: vec![
+                OsString::from("bench-scalability-worker"),
+                OsString::from("native-scheduler"),
                 OsString::from(kind),
                 OsString::from(count.to_string()),
                 OsString::from(iterations.to_string()),
@@ -5879,6 +5947,7 @@ fn bench_scalability_worker(args: Vec<String>) -> Result<()> {
     };
     let row = match family {
         "scheduler" => bench_scalability_scheduler_worker(&args[1..])?,
+        "native-scheduler" => bench_scalability_native_scheduler_worker(&args[1..])?,
         "data" => bench_scalability_data_worker(&args[1..])?,
         other => bail!("unsupported bench-scalability-worker family: {other}"),
     };
@@ -5953,6 +6022,247 @@ fn bench_scalability_scheduler_worker(args: &[String]) -> Result<Value> {
         "claim_eligibility": "resource_evidence_only_no_speedup_claim",
         "claim_scope": "Rust scheduler-core generated pressure row; no matched legacy scheduler process baseline."
     }))
+}
+
+fn bench_scalability_native_scheduler_worker(args: &[String]) -> Result<Value> {
+    if args.len() != 3 {
+        bail!("native scheduler scalability worker requires <native-runnable-drain|native-channel-rendezvous|native-domain-wakeups> <count> <iterations>");
+    }
+    let kind = args[0].as_str();
+    let count = parse_positive_u64(&args[1], "native scheduler pressure count")?;
+    let iterations = parse_positive_u64(&args[2], "native scheduler pressure iterations")?;
+    match kind {
+        "native-runnable-drain" => bench_native_scheduler_runnable_drain(count, iterations),
+        "native-channel-rendezvous" => bench_native_scheduler_channel_rendezvous(count, iterations),
+        "native-domain-wakeups" => bench_native_scheduler_domain_wakeups(count, iterations),
+        other => bail!("unsupported native scheduler scalability kind: {other}"),
+    }
+}
+
+fn bench_native_scheduler_runnable_drain(count: u64, iterations: u64) -> Result<Value> {
+    let count_usize = usize::try_from(count).context("native runnable count exceeds usize")?;
+    let mut scheduler = CoreScheduler::new();
+    let queue = scheduler.create_run_queue();
+    let tasklets = (0..count_usize)
+        .map(|_| scheduler.create_tasklet())
+        .collect::<Vec<_>>();
+
+    let mut latency_samples = Vec::with_capacity(iterations as usize);
+    let mut completed = 0_u64;
+    let started = Instant::now();
+    for _ in 0..iterations {
+        let sample_started = Instant::now();
+        for tasklet in &tasklets {
+            scheduler
+                .schedule_tasklet_back(queue, *tasklet)
+                .context("scheduling native runnable tasklet")?;
+        }
+        let mut popped = 0_u64;
+        while let Some(tasklet) = scheduler
+            .pop_next_runnable_tasklet(queue)
+            .context("popping native runnable tasklet")?
+        {
+            popped += 1;
+            black_box(tasklet);
+        }
+        if popped != count {
+            bail!("native runnable drain popped {popped} tasklets, expected {count}");
+        }
+        completed = completed.saturating_add(popped);
+        latency_samples.push(sample_started.elapsed().as_micros() as u64);
+    }
+    let duration_us = started.elapsed().as_micros() as u64;
+    let operation_count = count.saturating_mul(iterations).saturating_mul(2);
+
+    Ok(native_scheduler_row(
+        "native-runnable-drain",
+        count,
+        iterations,
+        json!({
+            "axis": "tasklet_count",
+            "tasklet_count": count,
+            "iterations_per_process": iterations,
+            "hot_loop_setup": "tasklets and run queue allocated before timed loop"
+        }),
+        duration_us,
+        operation_count,
+        completed,
+        0,
+        latency_samples,
+        "Rust-owned run queue schedule+drain with no Python, Greenlet, PyO3, trace interpreter, or refcount work in the hot path.",
+    ))
+}
+
+fn bench_native_scheduler_channel_rendezvous(pair_count: u64, iterations: u64) -> Result<Value> {
+    let pair_count_usize =
+        usize::try_from(pair_count).context("native channel pair count exceeds usize")?;
+    let mut scheduler = CoreScheduler::new();
+    let mut channels = Vec::with_capacity(pair_count_usize);
+    let mut senders = Vec::with_capacity(pair_count_usize);
+    let mut receivers = Vec::with_capacity(pair_count_usize);
+    for _ in 0..pair_count_usize {
+        channels.push(scheduler.create_channel(0));
+        senders.push(scheduler.create_tasklet());
+        receivers.push(scheduler.create_tasklet());
+    }
+
+    let mut latency_samples = Vec::with_capacity(iterations as usize);
+    let mut transfers = 0_u64;
+    let started = Instant::now();
+    for _ in 0..iterations {
+        let sample_started = Instant::now();
+        for index in 0..pair_count_usize {
+            scheduler
+                .receive(receivers[index], channels[index])
+                .context("blocking native channel receiver")?;
+            let result = scheduler
+                .send(senders[index], channels[index])
+                .context("matching native channel sender")?;
+            transfers += 1;
+            black_box(result);
+        }
+        latency_samples.push(sample_started.elapsed().as_micros() as u64);
+    }
+    for channel in &channels {
+        let snapshot = scheduler
+            .channel_snapshot(*channel)
+            .context("reading native channel snapshot after rendezvous")?;
+        if snapshot.balance != 0 {
+            bail!(
+                "native channel rendezvous left non-zero balance {}",
+                snapshot.balance
+            );
+        }
+    }
+    let duration_us = started.elapsed().as_micros() as u64;
+    let operation_count = pair_count.saturating_mul(iterations).saturating_mul(2);
+
+    Ok(native_scheduler_row(
+        "native-channel-rendezvous",
+        pair_count,
+        iterations,
+        json!({
+            "axis": "channel_pair_count",
+            "channel_pair_count": pair_count,
+            "tasklet_count": pair_count.saturating_mul(2),
+            "iterations_per_process": iterations,
+            "hot_loop_setup": "tasklets and channels allocated before timed loop"
+        }),
+        duration_us,
+        operation_count,
+        transfers,
+        pair_count,
+        latency_samples,
+        "Rust-owned unbuffered channel receive+send rendezvous with payload-token handoff and no Python payload objects in the hot path.",
+    ))
+}
+
+fn bench_native_scheduler_domain_wakeups(wakeup_count: u64, iterations: u64) -> Result<Value> {
+    let wakeup_count_usize =
+        usize::try_from(wakeup_count).context("native domain wakeup count exceeds usize")?;
+    let domain_count = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(4)
+        .clamp(2, 8);
+    let mut scheduler = CoreScheduler::new();
+    let queues = (0..domain_count)
+        .map(|_| scheduler.create_run_queue())
+        .collect::<Vec<_>>();
+    let tasklets = (0..wakeup_count_usize)
+        .map(|_| scheduler.create_tasklet())
+        .collect::<Vec<_>>();
+
+    let mut latency_samples = Vec::with_capacity(iterations as usize);
+    let mut drained = 0_u64;
+    let started = Instant::now();
+    for _ in 0..iterations {
+        let sample_started = Instant::now();
+        for (index, tasklet) in tasklets.iter().enumerate() {
+            let queue = queues[index % queues.len()];
+            scheduler
+                .schedule_tasklet_back(queue, *tasklet)
+                .context("enqueuing native domain wakeup")?;
+        }
+        let mut popped = 0_u64;
+        for queue in &queues {
+            while let Some(tasklet) = scheduler
+                .pop_next_runnable_tasklet(*queue)
+                .context("draining native domain queue")?
+            {
+                popped += 1;
+                black_box(tasklet);
+            }
+        }
+        if popped != wakeup_count {
+            bail!("native domain wakeup drain popped {popped} tasklets, expected {wakeup_count}");
+        }
+        drained = drained.saturating_add(popped);
+        latency_samples.push(sample_started.elapsed().as_micros() as u64);
+    }
+    let duration_us = started.elapsed().as_micros() as u64;
+    let operation_count = wakeup_count.saturating_mul(iterations).saturating_mul(2);
+
+    Ok(native_scheduler_row(
+        "native-domain-wakeups",
+        wakeup_count,
+        iterations,
+        json!({
+            "axis": "domain_wakeup_count",
+            "wakeup_count": wakeup_count,
+            "domain_count": domain_count,
+            "iterations_per_process": iterations,
+            "hot_loop_setup": "tasklets and owner-domain queues allocated before timed loop"
+        }),
+        duration_us,
+        operation_count,
+        drained,
+        domain_count as u64,
+        latency_samples,
+        "Rust-owned domain-style wakeup enqueue+drain across multiple run queues; this models the target architecture without Python/Greenlet scheduling.",
+    ))
+}
+
+fn native_scheduler_row(
+    kind: &str,
+    count: u64,
+    iterations: u64,
+    pressure: Value,
+    duration_us: u64,
+    operation_count: u64,
+    completed_units: u64,
+    secondary_units: u64,
+    latency_samples: Vec<u64>,
+    claim_scope: &str,
+) -> Value {
+    json!({
+        "family": "native-scheduler",
+        "component": "scheduler",
+        "workload": format!("native_scheduler_{kind}_{count}"),
+        "implementation": "rust_core_scheduler_native_no_python",
+        "architecture_lane": "native_rust_scheduler_kernel_no_python_hot_path",
+        "no_python_hot_path": true,
+        "no_greenlet_hot_path": true,
+        "no_pyo3_hot_path": true,
+        "pressure": pressure,
+        "duration_us": duration_us,
+        "duration_ms": duration_ms_from_us(duration_us),
+        "operation_count": operation_count,
+        "completed_units": completed_units,
+        "secondary_units": secondary_units,
+        "latency_samples_us": latency_samples,
+        "latency_us_extended": sample_stats_us_extended(&latency_samples),
+        "throughput_operations_per_sec": rate_per_second_us(operation_count, duration_us),
+        "throughput_completed_units_per_sec": rate_per_second_us(completed_units, duration_us),
+        "primary_throughput_metric": "throughput_operations_per_sec",
+        "primary_latency_metric": "latency_us_extended",
+        "parity_status": "native_invariant_pass",
+        "parity_gate": "scheduler-fixtures.json plus native worker invariants",
+        "comparability": "rust_native_no_python_architecture_probe_not_legacy_api_comparable",
+        "claim_eligibility": "architecture_evidence_only_no_legacy_speedup_claim",
+        "claim_scope": claim_scope,
+        "benchmark_read": "Use this row to estimate target Rust scheduler-kernel upside after removing Python/Greenlet/PyO3 from the hot path; keep separate from same-Python-API parity rows.",
+        "iterations_per_process": iterations
+    })
 }
 
 fn generated_runnable_tasklets_scenario(count: u64) -> Result<Scenario> {
@@ -16790,7 +17100,7 @@ fn shell_quote(value: &str) -> String {
 
 fn print_usage() {
     eprintln!(
-        "usage: cargo run -p xtask -- <command>\n\ncommands:\n  scheduler-fixtures [fixtures/scheduler]\n  scheduler-trace <fixture-path>\n  legacy-scheduler [build|run|build-run|native-linux]\n  legacy-scheduler import <artifact.json|ctest.log> [--host-os <windows|macos>] [--host-arch <x86_64|aarch64>]\n  rust-scheduler-python\n  io-workloads\n  legacy-resources\n  rust-resources\n  bench\n  bench-scheduler-comparison [--workload-set pressure|all] [--tier quick|full] [--samples N]\n  bench-scalability [--tier quick|full] [--families scheduler,io,data] [--samples N]\n  bench-scheduler-core [fixture-path] [iterations]\n  report-readiness\n  report-progress\n  report\n  rust-resources-cli <legacy-resource-command> [options]\n  rust-create-group [options] <input-directory>\n  rust-create-group-from-filter [options]\n  rust-create-bundle [options] <resource-group-path>\n  rust-unpack-bundle [options] <bundle-resource-group-path>\n  rust-create-patch [options] <previous-resource-group-path> <next-resource-group-path>\n  rust-apply-patch [options] <patch-resource-group-path>\n  rust-merge-group [options] <base-resource-group-path> <merge-resource-group-path>\n  rust-diff-group [options] <base-resource-group-path> <diff-resource-group-path>\n  rust-remove-resources [options] <resource-group-path> <resource-list-path>"
+        "usage: cargo run -p xtask -- <command>\n\ncommands:\n  scheduler-fixtures [fixtures/scheduler]\n  scheduler-trace <fixture-path>\n  legacy-scheduler [build|run|build-run|native-linux]\n  legacy-scheduler import <artifact.json|ctest.log> [--host-os <windows|macos>] [--host-arch <x86_64|aarch64>]\n  rust-scheduler-python\n  io-workloads\n  legacy-resources\n  rust-resources\n  bench\n  bench-scheduler-comparison [--workload-set pressure|all] [--tier quick|full] [--samples N]\n  bench-scalability [--tier quick|full] [--families scheduler,native-scheduler,io,data] [--samples N]\n  bench-scheduler-core [fixture-path] [iterations]\n  report-readiness\n  report-progress\n  report\n  rust-resources-cli <legacy-resource-command> [options]\n  rust-create-group [options] <input-directory>\n  rust-create-group-from-filter [options]\n  rust-create-bundle [options] <resource-group-path>\n  rust-unpack-bundle [options] <bundle-resource-group-path>\n  rust-create-patch [options] <previous-resource-group-path> <next-resource-group-path>\n  rust-apply-patch [options] <patch-resource-group-path>\n  rust-merge-group [options] <base-resource-group-path> <merge-resource-group-path>\n  rust-diff-group [options] <base-resource-group-path> <diff-resource-group-path>\n  rust-remove-resources [options] <resource-group-path> <resource-list-path>"
     );
 }
 
@@ -20379,6 +20689,36 @@ mod tests {
                 .get("stable_rows_cv_le_10_percent")
                 .and_then(Value::as_u64),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn native_scheduler_worker_records_no_python_architecture_lane() {
+        let row = bench_scalability_native_scheduler_worker(&[
+            String::from("native-runnable-drain"),
+            String::from("8"),
+            String::from("2"),
+        ])
+        .expect("run native scheduler worker");
+
+        assert_eq!(
+            row.get("family").and_then(Value::as_str),
+            Some("native-scheduler")
+        );
+        assert_eq!(
+            row.get("architecture_lane").and_then(Value::as_str),
+            Some("native_rust_scheduler_kernel_no_python_hot_path")
+        );
+        assert_eq!(
+            row.get("no_python_hot_path").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            row.get("comparability").and_then(Value::as_str),
+            Some("rust_native_no_python_architecture_probe_not_legacy_api_comparable")
+        );
+        assert!(
+            number_at(&row, &["throughput_operations_per_sec"]).is_some_and(|value| value > 0.0)
         );
     }
 

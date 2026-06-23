@@ -238,7 +238,7 @@ is the shortest path from the current progress report to the final HTML report.
 | --- | --- | --- | --- |
 | Scheduler semantic fixtures | `scheduler-fixtures.json` passes 56/56 fixtures, including limited `run_n_tasklets(1)` schedule-order fixtures, invalid direct tasklet run/switch no-mutation coverage, `scheduler.schedule` BACK requeue ordering, FRONT_PLUS_ONE targeted-run boundary trace expectations, switch-trap trapped-operation counts with zero mutating schedule/schedule_remove events, and fixture-level blocked-channel teardown cleanup, `report_ready=true` | Closed for the current deterministic core fixture gate | Keep this gate green while core ownership moves out of the Python bridge; add new fixtures when ownership changes touch tasklet, channel, timeout, switch-trap, or cleanup semantics. |
 | Legacy scheduler baseline | `legacy-scheduler.json` passes `cargo run -p xtask -- legacy-scheduler native-linux` on this host with `210` Python tests, `7` skips, and `36/36` C API CTest cases, `report_ready=true` | Closed for this host | Keep this gate green before publishing scheduler comparison evidence. |
-| Rust scheduler Python/C API | `rust-scheduler-python.json` passes, `core_ownership_status.status=partial`; covered channel transfers now use core-owned payload handoff tokens and blocked throw cleanup resolves channel/direction from core snapshots while PyO3 stores the actual Python value/exception objects | Queue identity adapters, remaining lifecycle decisions, callbacks, refcount/GC, Python payload object storage, and in-process C API coverage are not final | Make `CoreScheduler` snapshots authoritative for the remaining lifecycle/channel decisions while PyO3 holds only compatibility payload objects; keep unchanged Python tests and C API source slices green. |
+| Rust scheduler Python/C API | `rust-scheduler-python.json` passes, `core_ownership_status.status=partial`; covered channel transfers now use core-owned payload handoff tokens, blocked throw cleanup resolves channel/direction from core snapshots, and public tasklet insert/run/switch guards plus C API block-trap reads consult core snapshots while PyO3 stores the actual Python value/exception objects | Queue identity adapters, remaining lifecycle decisions, callbacks, refcount/GC, Python payload object storage, and in-process C API coverage are not final | Make `CoreScheduler` snapshots authoritative for the remaining lifecycle/channel decisions while PyO3 holds only compatibility payload objects; keep unchanged Python tests and C API source slices green. |
 | Realistic IO workloads | `io-workloads.json` passes loopback and fixture-only traces; `io-workloads` can now import timing-free normalized trace artifacts from `CARBON_LEGACY_CARBONIO_TRACE_JSON` and `CARBON_RUST_CARBONIO_TRACE_JSON` | No captured legacy `carbonio`/`_socket`/`_ssl` semantic trace comparison from supported-platform artifacts | Capture or import supported-platform legacy Carbon IO traces and compare normalized wake/send/throw events against the Rust bridge until `legacy_carbonio_trace_status=pass`. |
 | Scheduler benchmark comparability | `scheduler-comparison.json` has matched legacy C++ scheduler vs Rust scheduler bridge pressure rows with semantic checksums, throughput, p99/p99.9, CPU p95, peak RSS p95, and throughput CV | Real game-environment validation is still not captured | Use the lab rows for clearly labeled scheduler comparison, then add a real game trace or harness before production scheduler claims. |
 | Final report | `report-progress` writes HTML; `report` exits `1` | Multiple evidence files have `report_ready=false` | Every feature/performance claim in the final report links to passing, report-ready evidence. |
@@ -455,7 +455,17 @@ cache misses, and scheduler tail latency.
 ## Performance Thesis
 
 The scheduler hot path is not primarily vector math. It is ordered state-machine
-work. The speedup comes from:
+work. On the compatibility bridge, Python/Greenlet/PyO3 cost is real and limits
+what a micro-optimization can prove. That is a parity benchmark, not the final
+architecture benchmark.
+
+The final Rust architecture must also be measured without Python in the hot
+path. That native lane is valid even when it is not legacy same-API comparable:
+it answers whether Rust-owned domains, tasklets, channels, and game-workload
+kernels become cheaper when the scheduler no longer manages Python objects,
+Greenlets, or refcounts.
+
+The speedup comes from:
 
 - dense hot state in Rust arrays;
 - generational IDs instead of object pointers;
@@ -484,6 +494,33 @@ Vectorization still matters, but mostly around the scheduler:
 
 Do not try to SIMD-optimize the runnable queue or channel FIFO itself. Those are
 ordered control-flow structures. Make them compact and branch-light instead.
+
+## Benchmark Architecture Lanes
+
+Use three separate benchmark lanes and label them separately in reports:
+
+1. **Compatibility bridge parity:** legacy C++ scheduler extension versus the
+   Rust bridge through the same Python tasklet/channel API. This proves behavior
+   and exposes bridge overhead. It should not be used to dismiss native Rust
+   architecture upside, because Python/Greenlet/PyO3 remains in the hot path.
+2. **Native Rust scheduler kernel:** Rust-owned tasklets, queues, channels,
+   wakeups, domains, and budgets with no Python objects or Greenlets in the hot
+   path. This is the right benchmark for scheduler dispatch cost, tail latency,
+   memory per tasklet/channel, overload behavior, and cross-domain wakeup cost.
+3. **Native Rust game-workload kernels:** pure Rust data snapshots or owned
+   domain data processed with scalar Rust first, then Rayon/SIMD/bitsets where
+   profiling shows dense regular work. This is the valid 10x-20x lane.
+
+The SIMD/Rayon note therefore has a narrow meaning: SIMD is premature for the
+current Python bridge pressure rows because those rows are dominated by bridge
+and control-flow costs. It is not premature for native Rust lanes once a dense
+workload exists and a scalar Rust baseline is green.
+
+Current implementation: `bench-scalability --families native-scheduler` records
+the native Rust scheduler kernel lane. The quick tier covers runnable queue
+drain, channel rendezvous, and domain-style wakeups with `no_python_hot_path`
+metadata. These rows are target-architecture probes; they should be shown beside
+the bridge parity rows, not merged into legacy speedup claims.
 
 ## Post-Parity Experiment Sequence
 

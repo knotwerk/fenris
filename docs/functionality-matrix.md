@@ -61,8 +61,10 @@ callable execution, and Python scheduler switch-trap entrypoints plus trapped
 operation guards now use CoreScheduler per-run-queue state. Python runtime sync
 no longer writes the core scheduled flag; Python-visible tasklet
 alive/blocked/scheduled/paused/block_trap/times_switched_to properties and the
-C API times-switched getter now read CoreScheduler snapshots, including the
-legacy transient current-tasklet scheduled flag during `scheduler.schedule()`.
+public tasklet insert/run/switch invalid-state guards, current-tasklet
+block-trap guard used by channel operations, and C API times-switched/block-trap
+getters now read CoreScheduler snapshots, including the legacy transient
+current-tasklet scheduled flag during `scheduler.schedule()`.
 Python-visible channel preference/closing/closed properties also read
 CoreScheduler snapshots. Current-thread runnable PyObject registry storage is
 now thread-local compatibility state while CoreScheduler remains the runnable
@@ -221,6 +223,27 @@ scheduler comparison evidence now records matched legacy C++ scheduler vs Rust
 scheduler bridge pressure rows with semantic checksums, throughput, p99/p99.9,
 CPU p95, peak RSS p95, and throughput CV; those rows are lab evidence until a
 real game-environment workload exists.
+
+Scheduler performance evidence must distinguish compatibility from target
+architecture. The same-Python-API bridge rows are the parity lane: they measure
+the legacy surface and expose Python/Greenlet/PyO3 overhead while the port is
+being proven. A separate native Rust scheduler lane is required for the final
+architecture: Rust-owned tasklets, channels, wakeups, domains, and budgets with
+no Python objects, Greenlets, or refcounts in the hot path. That no-Python lane
+is a valid benchmark architecture change, even though it is not a same-API
+legacy comparison. Rayon, SIMD, bitsets, and vectorized data layouts belong only
+after that native lane has a scalar Rust baseline or a dense game-workload
+kernel to optimize.
+
+`bench-scalability` now includes that no-Python lane through
+`--families native-scheduler`. The current release-native, target-cpu-native
+quick matrix records four native scheduler rows in `scalability-matrix.json`:
+runnable drain at 1,024 and 16,384 tasklets, channel rendezvous at 1,024 pairs,
+and domain-style wakeups at 4,096 wakeups. These rows are explicitly marked
+`rust_native_no_python_architecture_probe_not_legacy_api_comparable` and
+`no_python_hot_path=true`; they measure target-architecture upside, not legacy
+API parity.
+
 For resources process comparisons, `bench-tier-local.json` now records
 `optimization_readiness`, selected legacy resources CLI paths, surrounding
 CMake build type, and `legacy_known_non_debug`. On this checkout the native
