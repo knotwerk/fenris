@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Context, Result};
-use carbon_scheduler_core::{run_scenario, Scenario, SEMANTIC_TRACE_SCHEMA};
+use carbon_scheduler_core::{
+    run_scenario, run_scenario_with_teardown, MainStep, Scenario, SEMANTIC_TRACE_SCHEMA,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -10,10 +12,20 @@ pub struct Fixture {
     pub schema: String,
     pub name: String,
     pub scenario: Scenario,
+    #[serde(default)]
+    pub teardown: Option<FixtureTeardown>,
     #[serde(default = "default_check_events")]
     pub check_events: bool,
     #[serde(default)]
     pub events: Vec<Value>,
+    #[serde(default)]
+    pub expect: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FixtureTeardown {
+    #[serde(default)]
+    pub steps: Vec<MainStep>,
     #[serde(default)]
     pub expect: Value,
 }
@@ -26,6 +38,8 @@ pub struct FixtureReport {
     pub expected_events: usize,
     pub generated_events: usize,
     pub final_state_checked: bool,
+    pub teardown_checked: bool,
+    pub teardown_steps: usize,
     pub invariants_checked: bool,
     pub invariant_checks: usize,
     pub differences: Vec<String>,
@@ -91,7 +105,7 @@ pub fn run_fixture_dir(path: impl AsRef<Path>) -> Result<FixtureDirReport> {
         gate: "scheduler-fixtures",
         status,
         report_ready: status == GateStatus::Pass,
-        coverage: "event_or_final_state_checked_event_run_count_calculated_run_count_invariant_checked_scheduler_semantic_fixtures_tasklet_run_bind_setup_rebind_schedule_run_n_timeout_counters_nested_timeout_remainder_scheduled_remove_nested_schedule_multi_level_blocked_yield_scheduler_switch_trap_no_mutation_switch_trap_nested_level_channel_callback_preference_neutral_order_main_side_preference_close_clear_pending_teardown_cleanup_exception_throw_closed_channel_deadlock",
+        coverage: "event_or_final_state_checked_event_run_count_calculated_run_count_invariant_checked_scheduler_semantic_fixtures_tasklet_run_bind_setup_rebind_schedule_run_n_timeout_counters_nested_timeout_remainder_scheduled_remove_nested_schedule_multi_level_blocked_yield_scheduler_switch_trap_no_mutation_switch_trap_nested_level_channel_callback_preference_neutral_order_main_side_preference_fixture_teardown_blocked_channel_cleanup_close_clear_pending_teardown_cleanup_exception_throw_closed_channel_deadlock",
         fixture_count: reports.len(),
         passed,
         failed,
@@ -102,8 +116,27 @@ pub fn run_fixture_dir(path: impl AsRef<Path>) -> Result<FixtureDirReport> {
 pub fn run_fixture_path(path: impl AsRef<Path>) -> Result<FixtureReport> {
     let path = path.as_ref();
     let fixture = load_fixture(path)?;
-    let trace = run_scenario(&fixture.scenario)
-        .with_context(|| format!("running fixture {}", fixture.name))?;
+    let teardown_steps = fixture
+        .teardown
+        .as_ref()
+        .map(|teardown| teardown.steps.len());
+    let trace = if let Some(teardown) = &fixture.teardown {
+        let run = run_scenario_with_teardown(&fixture.scenario, &teardown.steps)
+            .with_context(|| format!("running fixture {}", fixture.name))?;
+        TraceForFixture {
+            events: run.events,
+            final_state: run.final_state,
+            expected_state: run.pre_teardown_state,
+        }
+    } else {
+        let run = run_scenario(&fixture.scenario)
+            .with_context(|| format!("running fixture {}", fixture.name))?;
+        TraceForFixture {
+            events: run.events,
+            expected_state: run.final_state.clone(),
+            final_state: run.final_state,
+        }
+    };
 
     let mut differences = Vec::new();
     if fixture.schema != SEMANTIC_TRACE_SCHEMA {
@@ -137,11 +170,21 @@ pub fn run_fixture_path(path: impl AsRef<Path>) -> Result<FixtureReport> {
 
     if !fixture.expect.is_null() {
         value_contains(
-            &trace.final_state,
+            &trace.expected_state,
             &fixture.expect,
             "$.expect",
             &mut differences,
         );
+    }
+    if let Some(teardown) = &fixture.teardown {
+        if !teardown.expect.is_null() {
+            value_contains(
+                &trace.final_state,
+                &teardown.expect,
+                "$.teardown.expect",
+                &mut differences,
+            );
+        }
     }
     let invariant_checks =
         validate_trace_invariants(&trace.events, &trace.final_state, &mut differences);
@@ -163,10 +206,21 @@ pub fn run_fixture_path(path: impl AsRef<Path>) -> Result<FixtureReport> {
         },
         generated_events: trace.events.len(),
         final_state_checked: !fixture.expect.is_null(),
+        teardown_checked: fixture
+            .teardown
+            .as_ref()
+            .is_some_and(|teardown| !teardown.expect.is_null()),
+        teardown_steps: teardown_steps.unwrap_or(0),
         invariants_checked: true,
         invariant_checks,
         differences,
     })
+}
+
+struct TraceForFixture {
+    events: Vec<Value>,
+    expected_state: Value,
+    final_state: Value,
 }
 
 pub fn load_fixture(path: impl AsRef<Path>) -> Result<Fixture> {
@@ -354,6 +408,18 @@ fn validate_trace_invariants(
             ));
         }
     }
+    let blocked_tasklet_count = tasklets
+        .values()
+        .filter(|tasklet| bool_field(tasklet, "blocked") == Some(true))
+        .count();
+    checks += 1;
+    compare_usize_field(
+        final_state,
+        "blocked_tasklet_count",
+        blocked_tasklet_count,
+        "$.final_state.blocked_tasklet_count",
+        differences,
+    );
 
     let Some(channels) = final_state.get("channels").and_then(Value::as_object) else {
         differences.push(String::from(
@@ -421,6 +487,21 @@ fn validate_trace_invariants(
             );
         }
     }
+    let blocked_channel_count = channels
+        .values()
+        .filter(|channel| {
+            !string_array_field(channel, "blocked_senders").is_empty()
+                || !string_array_field(channel, "blocked_receivers").is_empty()
+        })
+        .count();
+    checks += 1;
+    compare_usize_field(
+        final_state,
+        "blocked_channel_count",
+        blocked_channel_count,
+        "$.final_state.blocked_channel_count",
+        differences,
+    );
 
     for (tasklet_id, tasklet) in tasklets {
         let Some(blocked_on) = tasklet.get("blocked_on").and_then(Value::as_str) else {

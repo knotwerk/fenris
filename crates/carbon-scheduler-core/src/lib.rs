@@ -239,6 +239,14 @@ pub struct TraceRun {
     pub final_state: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeardownTraceRun {
+    pub schema: &'static str,
+    pub events: Vec<Value>,
+    pub pre_teardown_state: Value,
+    pub final_state: Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchedulerError {
     DuplicateTasklet(String),
@@ -1015,6 +1023,23 @@ pub fn run_scenario(scenario: &Scenario) -> Result<TraceRun, SchedulerError> {
     Ok(TraceRun {
         schema: SEMANTIC_TRACE_SCHEMA,
         events: runtime.events,
+        final_state,
+    })
+}
+
+pub fn run_scenario_with_teardown(
+    scenario: &Scenario,
+    teardown_steps: &[MainStep],
+) -> Result<TeardownTraceRun, SchedulerError> {
+    let mut runtime = Runtime::new(scenario)?;
+    runtime.run()?;
+    let pre_teardown_state = runtime.final_state();
+    runtime.run_script(teardown_steps)?;
+    let final_state = runtime.final_state();
+    Ok(TeardownTraceRun {
+        schema: SEMANTIC_TRACE_SCHEMA,
+        events: runtime.events,
+        pre_teardown_state,
         final_state,
     })
 }
@@ -3311,9 +3336,21 @@ impl Runtime {
             tasklets.insert(id.clone(), Value::Object(tasklet));
         }
         root.insert(String::from("tasklets"), Value::Object(tasklets));
+        root.insert(
+            String::from("blocked_tasklet_count"),
+            json!(self
+                .tasklets
+                .values()
+                .filter(|tasklet| tasklet.blocked)
+                .count()),
+        );
 
         let mut channels = Map::new();
+        let mut blocked_channel_count = 0usize;
         for (id, channel) in &self.channels {
+            if !channel.blocked_receivers.is_empty() || !channel.blocked_senders.is_empty() {
+                blocked_channel_count += 1;
+            }
             let queue_front = channel
                 .blocked_receivers
                 .front()
@@ -3337,6 +3374,10 @@ impl Runtime {
             );
         }
         root.insert(String::from("channels"), Value::Object(channels));
+        root.insert(
+            String::from("blocked_channel_count"),
+            json!(blocked_channel_count),
+        );
         root.insert(
             String::from("all_time_tasklet_count"),
             json!(self.tasklets.len() + 1),
