@@ -201,6 +201,8 @@ def fmt_signed_percent(value: object) -> str:
     amount = number(value)
     if amount is None:
         return "n/a"
+    if abs(amount) < 0.5:
+        return "0% change"
     direction = "lower" if amount >= 0 else "higher"
     return f"{abs(amount):.0f}% {direction}"
 
@@ -212,6 +214,17 @@ def fmt_kb(value: object) -> str:
     if amount >= 1024:
         return f"{amount / 1024:.1f} MB"
     return f"{amount:.0f} KB"
+
+
+def fmt_bytes(value: object) -> str:
+    amount = number(value)
+    if amount is None:
+        return "n/a"
+    if amount >= 1024 * 1024:
+        return f"{amount / (1024 * 1024):.1f} MB"
+    if amount >= 1024:
+        return f"{amount / 1024:.1f} KB"
+    return f"{amount:.0f} B"
 
 
 def fmt_us(value: object) -> str:
@@ -1109,7 +1122,8 @@ def performance_breakdown_cards(
     scheduler_summary: dict,
     resource_summary: dict,
     scheduler_pressure_rows_data: list[dict],
-    io_rows_data: list[dict],
+    io_capacity_rows_data: list[dict],
+    data_rows_data: list[dict],
 ) -> str:
     pressure_rows_count = len(scheduler_pressure_rows_data)
     stable_rows = sum(
@@ -1150,7 +1164,46 @@ def performance_breakdown_cards(
         ),
         default=None,
     )
-    io_count = len(io_rows_data)
+    peak_network_bytes_per_sec = max(
+        (
+            float(row.get("throughput_network_bytes_per_sec"))
+            for row in io_capacity_rows_data
+            if number(row.get("throughput_network_bytes_per_sec")) is not None
+        ),
+        default=None,
+    )
+    peak_requests_per_sec = max(
+        (
+            float(row.get("throughput_requests_per_sec"))
+            for row in io_capacity_rows_data
+            if number(row.get("throughput_requests_per_sec")) is not None
+        ),
+        default=None,
+    )
+    worst_io_p99_us = max(
+        (
+            float(path_value(row, "/latency_us_extended/p99"))
+            for row in io_capacity_rows_data
+            if number(path_value(row, "/latency_us_extended/p99")) is not None
+        ),
+        default=None,
+    )
+    peak_data_bytes_per_sec = max(
+        (
+            float(row.get("throughput_data_bytes_per_sec"))
+            for row in data_rows_data
+            if number(row.get("throughput_data_bytes_per_sec")) is not None
+        ),
+        default=None,
+    )
+    peak_rows_per_sec = max(
+        (
+            float(row.get("throughput_rows_per_sec"))
+            for row in data_rows_data
+            if number(row.get("throughput_rows_per_sec")) is not None
+        ),
+        default=None,
+    )
     return "\n".join(
         [
             metric_card(
@@ -1184,6 +1237,21 @@ def performance_breakdown_cards(
                 f"p95 peak RSS across {fmt_int(pressure_rows_count)} scheduler pressure rows",
             ),
             metric_card(
+                "Network capacity",
+                fmt_rate(peak_network_bytes_per_sec, "bytes"),
+                f"peak local loopback transfer; {fmt_rate(peak_requests_per_sec, 'requests')} peak",
+            ),
+            metric_card(
+                "Network tail",
+                fmt_us(worst_io_p99_us),
+                f"worst p99 across {fmt_int(len(io_capacity_rows_data))} socket/TLS pressure rows",
+            ),
+            metric_card(
+                "Data throughput",
+                fmt_rate(peak_data_bytes_per_sec, "bytes"),
+                f"Rust resource/data pressure rows; {fmt_rate(peak_rows_per_sec, 'rows')} peak rows/sec",
+            ),
+            metric_card(
                 "Resources throughput",
                 fmt_directional_ratio(resource_summary["median_speedup"]),
                 f"separate resource CLI comparison; {resource_summary['rows']} rows",
@@ -1194,9 +1262,9 @@ def performance_breakdown_cards(
                 f"peak memory {fmt_signed_percent(resource_summary['median_rss_reduction'])}",
             ),
             metric_card(
-                "IO loopback",
-                f"{fmt_int(io_count)} rows",
-                "request, byte, CPU, and memory stats; not legacy Carbon IO parity",
+                "Data/resource rows",
+                fmt_int(len(data_rows_data)),
+                "checksum, compression, YAML/JSON catalog, Arrow IPC, and Parquet/Zstd pressure",
             ),
         ]
     )
@@ -1371,6 +1439,72 @@ def resource_format_rows(rows: list[dict]) -> str:
             f"<td>{h(fmt_us(path_value(row, '/latency_us_extended/p99')))}</td>"
             f"<td>{h(fmt_kb(path_value(row, '/process_stats/max_rss_kb/p95')))}</td>"
             f"<td><small>{h(row.get('claim_scope') or row.get('comparability'))}</small></td>"
+            "</tr>"
+        )
+    return "\n".join(rendered)
+
+
+def scalability_io_rows(rows: list[dict]) -> str:
+    io_rows_data = [row for row in rows if row.get("component") == "io"]
+    if not io_rows_data:
+        return '<tr><td colspan="8">No network pressure rows were sampled in this evidence file.</td></tr>'
+    rendered = []
+    for row in sorted(io_rows_data, key=lambda item: str(item.get("workload") or "")):
+        pressure = row.get("pressure") or {}
+        label = str(row.get("kind") or "io").upper()
+        payload = fmt_int(pressure.get("payload_bytes"))
+        concurrency = fmt_int(pressure.get("concurrency"))
+        rendered.append(
+            "<tr>"
+            f"<td><strong>{h(label)}</strong><small>{h(payload)} B payload; concurrency {h(concurrency)}</small></td>"
+            f"<td>{h(fmt_rate(row.get('throughput_requests_per_sec'), 'requests'))}</td>"
+            f"<td>{h(fmt_rate(row.get('throughput_network_bytes_per_sec'), 'bytes'))}</td>"
+            f"<td>{h(fmt_us(path_value(row, '/latency_us_extended/p99')))}</td>"
+            f"<td>{h(fmt_us(path_value(row, '/latency_us_extended/p99_9')))}</td>"
+            f"<td>{h(fmt_percent(path_value(row, '/process_stats/cpu_percent/p95')))}</td>"
+            f"<td>{h(fmt_kb(path_value(row, '/process_stats/max_rss_kb/p95')))}</td>"
+            f"<td>{h(fmt_cv(path_value(row, '/stability/coefficient_of_variation')))}<small>{h(row.get('claim_scope'))}</small></td>"
+            "</tr>"
+        )
+    return "\n".join(rendered)
+
+
+def resource_pressure_title(row: dict) -> str:
+    workload = str(row.get("workload") or "")
+    if workload.startswith("data_md5_gzip_"):
+        return f"MD5 + gzip, {fmt_bytes(workload.rsplit('_', 1)[-1])}"
+    if workload.startswith("data_catalog_roundtrip_"):
+        return "YAML/JSON catalog round-trip"
+    if workload.startswith("data_catalog-arrow-ipc-roundtrip_"):
+        return "Arrow IPC catalog round-trip"
+    if workload.startswith("data_catalog-parquet-roundtrip_"):
+        return "Parquet/Zstd catalog round-trip"
+    return workload.replace("_", " ").title()
+
+
+def resource_pressure_rows(rows: list[dict]) -> str:
+    data_rows = [row for row in rows if row.get("component") == "resources"]
+    if not data_rows:
+        return '<tr><td colspan="8">No resource/data pressure rows were sampled in this evidence file.</td></tr>'
+    rendered = []
+    for row in sorted(data_rows, key=lambda item: str(item.get("workload") or "")):
+        pressure = row.get("pressure") or {}
+        if pressure.get("record_count") is not None:
+            pressure_label = f"{fmt_int(pressure.get('record_count'))} records"
+        elif pressure.get("payload_bytes") is not None:
+            pressure_label = f"{fmt_bytes(pressure.get('payload_bytes'))} payload"
+        else:
+            pressure_label = str(row.get("primary_throughput_metric") or "pressure row")
+        rendered.append(
+            "<tr>"
+            f"<td><strong>{h(resource_pressure_title(row))}</strong><small>{h(row.get('workload'))}</small></td>"
+            f"<td>{h(pressure_label)}</td>"
+            f"<td>{h(fmt_rate(row.get('throughput_operations_per_sec'), 'operations'))}</td>"
+            f"<td>{h(fmt_rate(row.get('throughput_data_bytes_per_sec'), 'bytes'))}</td>"
+            f"<td>{h(fmt_rate(row.get('throughput_rows_per_sec'), 'rows'))}</td>"
+            f"<td>{h(fmt_us(path_value(row, '/latency_us_extended/p99')))}</td>"
+            f"<td>{h(fmt_percent(path_value(row, '/process_stats/cpu_percent/p95')))}<small>{h(fmt_kb(path_value(row, '/process_stats/max_rss_kb/p95')))} peak RSS p95</small></td>"
+            f"<td>{h(fmt_cv(path_value(row, '/stability/coefficient_of_variation')))}<small>{h(row.get('claim_scope'))}</small></td>"
             "</tr>"
         )
     return "\n".join(rendered)
@@ -1609,6 +1743,16 @@ def render(evidence_dir: Path) -> str:
         row
         for row in scalability_evidence.get("rows", []) or []
         if row.get("component") == "scheduler"
+    ]
+    scalability_io_capacity_rows = [
+        row
+        for row in scalability_evidence.get("rows", []) or []
+        if row.get("component") == "io"
+    ]
+    scalability_resource_pressure_rows = [
+        row
+        for row in scalability_evidence.get("rows", []) or []
+        if row.get("component") == "resources"
     ]
     io_evidence = optional_json(evidence_dir / "io-workloads.json")
     io_comparison_rows = io_evidence.get("comparisons", []) or []
@@ -1992,15 +2136,15 @@ def render(evidence_dir: Path) -> str:
         <h2>Claim Boundary</h2>
         <ul>
           <li>Scheduler: covered semantics are ported and passing in lab evidence, but current same-API performance is slower than legacy C++.</li>
-          <li>Resources: same-format YAML/CSV and local bundle operations are separate supporting evidence, not scheduler evidence.</li>
-          <li>Modernized resources: Arrow IPC and Parquet are measured as resource-only upgraded-interface rows.</li>
+          <li>Resources repo: same-format YAML/CSV and local bundle operations are separate supporting evidence, not scheduler evidence.</li>
+          <li>Capacity rows: scheduler-core pressure, network loopback, Arrow IPC, and Parquet are labeled as supplemental evidence, not production speedup claims.</li>
         </ul>
       </aside>
     </section>
 
     <section>
       <div class="callout">
-        <strong>Bottom line:</strong> the scheduler port is now credible enough to measure, but it is not yet a speed win. The current value is that parity and the performance gap are quantified; the next loop has to make the Rust bridge robustly faster on the same API before any stronger scheduler claim is made.
+        <strong>Bottom line:</strong> the scheduler port is now credible enough to measure, but it is not yet a speed win. The current value is that parity and the performance gap are quantified across tasklet, channel, fanout, and synthetic zone-tick workloads; the next loop has to make the Rust bridge robustly faster on the same API before any stronger scheduler claim is made.
       </div>
     </section>
 
@@ -2024,6 +2168,19 @@ def render(evidence_dir: Path) -> str:
       </div>
       <div class="workload-grid">
         $scheduler_workload_cards
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>Performance Stats By Scope</h2>
+          <p>All resource-use and throughput stats are kept here with their claim boundary: matched scheduler comparison, Rust-only scheduler pressure, network loopback pressure, same-format resources, and native resource/data formats.</p>
+        </div>
+        <span class="tag">Scope split</span>
+      </div>
+      <div class="metric-grid">
+        $performance_breakdown
       </div>
     </section>
 
@@ -2153,8 +2310,32 @@ def render(evidence_dir: Path) -> str:
       </details>
 
       <details>
-        <summary>IO and network loopback rows</summary>
-        <p>Socket/TLS request, byte, CPU, and memory stats are included for completeness. They are not legacy Carbon IO comparisons yet.</p>
+        <summary>Network pressure rows</summary>
+        <p>Socket/TLS request, byte, CPU, memory, and stability stats from the local pressure matrix. They are not legacy Carbon IO comparisons.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Workload</th>
+              <th>Requests/sec</th>
+              <th>Network/sec</th>
+              <th>p99 latency</th>
+              <th>p99.9 latency</th>
+              <th>CPU p95</th>
+              <th>Peak RSS p95</th>
+              <th>Stability and boundary</th>
+            </tr>
+          </thead>
+          <tbody>
+            $io_capacity_rows
+          </tbody>
+        </table>
+      </div>
+      </details>
+
+      <details>
+        <summary>IO baseline-vs-bridge rows</summary>
+        <p>Socket/TLS request, byte, CPU, and memory stats comparing Python stdlib loopback with the Rust scheduler bridge. They are included for completeness and are not legacy Carbon IO parity.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -2170,6 +2351,30 @@ def render(evidence_dir: Path) -> str:
           </thead>
           <tbody>
             $io_rows
+          </tbody>
+        </table>
+      </div>
+      </details>
+
+      <details>
+        <summary>Resource and data pressure rows</summary>
+        <p>Rust-only checksum, compression, catalog, Arrow IPC, and Parquet pressure rows. They show capacity and resource shape, not legacy scheduler speedup.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Workload</th>
+              <th>Pressure</th>
+              <th>Operations/sec</th>
+              <th>Data/sec</th>
+              <th>Rows/sec</th>
+              <th>p99 latency</th>
+              <th>CPU / memory</th>
+              <th>Stability and boundary</th>
+            </tr>
+          </thead>
+          <tbody>
+            $resource_pressure_rows
           </tbody>
         </table>
       </div>
@@ -2207,6 +2412,13 @@ def render(evidence_dir: Path) -> str:
         ),
         repo_conversion=repo_conversion_cards(),
         scheduler_cards=summary_cards(scheduler_summary, subject="Scheduler"),
+        performance_breakdown=performance_breakdown_cards(
+            scheduler_summary,
+            resource_summary,
+            scheduler_pressure_rows,
+            scalability_io_capacity_rows,
+            scalability_resource_pressure_rows,
+        ),
         scheduler_workload_cards=scheduler_workload_cards(rows),
         resource_cards=summary_cards(resource_summary, subject="Resources"),
         native_resource_cards=native_resource_cards(scalability_evidence),
@@ -2217,7 +2429,13 @@ def render(evidence_dir: Path) -> str:
             scalability_evidence.get("rows", []) or []
         ),
         pressure_rows=pressure_rows(scheduler_pressure_rows),
+        io_capacity_rows=scalability_io_rows(
+            scalability_evidence.get("rows", []) or []
+        ),
         io_rows=io_rows(io_comparison_rows),
+        resource_pressure_rows=resource_pressure_rows(
+            scalability_evidence.get("rows", []) or []
+        ),
         methodology=methodology(bench, rows, evidence_dir),
         resources_methodology=resources_methodology(resources_evidence, evidence_dir),
         scalability_evidence_path=h(evidence_dir / "scalability-matrix.json"),
