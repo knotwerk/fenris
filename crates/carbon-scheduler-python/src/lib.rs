@@ -9,7 +9,8 @@
 use carbon_scheduler_core::CoreTaskletLifecycle;
 use carbon_scheduler_core::{
     CoreChannelDirection, CoreChannelId, CoreChannelOperationResult, CoreChannelSnapshot,
-    CoreRunQueueId, CoreScheduler, CoreSchedulerHandleError, CoreTaskletId, CoreTaskletSnapshot,
+    CorePayloadToken, CoreRunQueueId, CoreScheduler, CoreSchedulerHandleError, CoreTaskletId,
+    CoreTaskletSnapshot,
 };
 use carbon_scheduler_ffi::{carbon_scheduler_abi_version, CarbonSchedulerStatus};
 use pyo3::exceptions::{
@@ -1347,11 +1348,16 @@ pub struct Channel {
     object_ptr: usize,
     preference: i32,
     balance: i32,
-    messages: VecDeque<ChannelMessage>,
+    messages: VecDeque<ChannelPayload>,
     blocked_senders: VecDeque<PyObject>,
     blocked_receivers: VecDeque<PyObject>,
     closed: bool,
     closing: bool,
+}
+
+struct ChannelPayload {
+    token: CorePayloadToken,
+    message: ChannelMessage,
 }
 
 enum ChannelMessage {
@@ -1468,6 +1474,46 @@ impl Channel {
         Ok(())
     }
 
+    fn refresh_balance_from_core(&mut self) {
+        if let Some(core_id) = self.core_id {
+            if let Ok(snapshot) = bridge_core_channel_snapshot(core_id) {
+                let _ = self.set_balance_from_core(snapshot.balance);
+            }
+        }
+    }
+
+    fn push_payload(&mut self, token: CorePayloadToken, message: ChannelMessage) {
+        self.messages.push_back(ChannelPayload { token, message });
+    }
+
+    fn pop_payload_by_token(&mut self, token: CorePayloadToken) -> PyResult<ChannelMessage> {
+        let index = self
+            .messages
+            .iter()
+            .position(|payload| payload.token == token)
+            .ok_or_else(|| {
+                PyRuntimeError::new_err(
+                    "scheduler core bridge selected a missing channel payload token",
+                )
+            })?;
+        self.messages
+            .remove(index)
+            .map(|payload| payload.message)
+            .ok_or_else(|| {
+                PyRuntimeError::new_err("scheduler core bridge failed to remove channel payload")
+            })
+    }
+
+    fn remove_payload_by_token(&mut self, token: CorePayloadToken) {
+        if let Some(index) = self
+            .messages
+            .iter()
+            .position(|payload| payload.token == token)
+        {
+            self.messages.remove(index);
+        }
+    }
+
     fn assert_core_mirror(&self) -> PyResult<()> {
         #[cfg(debug_assertions)]
         {
@@ -1561,9 +1607,11 @@ impl Channel {
         let mut receivers = VecDeque::new();
         while let Some(receiver) = self.blocked_receivers.pop_front() {
             if tasklet_belongs_to_thread(py, &receiver, thread_id) {
-                self.balance += 1;
                 if let Ok(core_id) = tasklet_core_id(py, &receiver) {
-                    bridge_core_remove_tasklet_from_channel(core_id);
+                    let _ = bridge_core_remove_tasklet_from_channel(core_id);
+                    self.refresh_balance_from_core();
+                } else {
+                    self.balance += 1;
                 }
                 removed.push(receiver);
             } else {
@@ -1573,25 +1621,22 @@ impl Channel {
         self.blocked_receivers = receivers;
 
         let mut senders = VecDeque::new();
-        let mut messages = VecDeque::new();
         while let Some(sender) = self.blocked_senders.pop_front() {
-            let message = self.messages.pop_front();
             if tasklet_belongs_to_thread(py, &sender, thread_id) {
-                self.balance -= 1;
                 if let Ok(core_id) = tasklet_core_id(py, &sender) {
-                    bridge_core_remove_tasklet_from_channel(core_id);
+                    if let Some(payload_token) = bridge_core_remove_tasklet_from_channel(core_id) {
+                        self.remove_payload_by_token(payload_token);
+                    }
+                    self.refresh_balance_from_core();
+                } else {
+                    self.balance -= 1;
                 }
                 removed.push(sender);
             } else {
                 senders.push_back(sender);
-                if let Some(message) = message {
-                    messages.push_back(message);
-                }
             }
         }
-        messages.extend(self.messages.drain(..));
         self.blocked_senders = senders;
-        self.messages = messages;
 
         self.update_close_state();
         removed
@@ -2347,10 +2392,11 @@ fn send_channel_message(
     let channel_core_id = channel.core_channel_id()?;
 
     if !channel.blocked_receivers.is_empty() {
-        let (receiver, receiver_runs_immediately) =
+        let (receiver, receiver_runs_immediately, payload_token) =
             match bridge_core_send(current_core_id, channel_core_id)? {
                 CoreChannelOperationResult::Matched {
                     receiver,
+                    payload_token,
                     preferred,
                     peer_runs_immediately,
                     balance,
@@ -2365,6 +2411,7 @@ fn send_channel_message(
                     (
                         channel.pop_blocked_receiver_by_core_id(py, receiver)?,
                         peer_runs_immediately,
+                        payload_token,
                     )
                 }
                 CoreChannelOperationResult::Blocked { .. } => {
@@ -2373,7 +2420,7 @@ fn send_channel_message(
                     ));
                 }
             };
-        channel.messages.push_back(message);
+        channel.push_payload(payload_token, message);
         channel.update_close_state();
         channel.assert_core_mirror()?;
         drop(channel);
@@ -2397,9 +2444,16 @@ fn send_channel_message(
                 tasklet,
                 direction,
                 balance,
+                payload_token,
                 ..
             } if tasklet == current_core_id && direction == CoreChannelDirection::Send => {
                 channel.set_balance_from_core(balance)?;
+                let payload_token = payload_token.ok_or_else(|| {
+                    PyRuntimeError::new_err(
+                        "scheduler core bridge blocked send without a payload token",
+                    )
+                })?;
+                channel.push_payload(payload_token, message);
             }
             CoreChannelOperationResult::Blocked { .. } => {
                 return Err(PyRuntimeError::new_err(
@@ -2412,7 +2466,6 @@ fn send_channel_message(
                 ));
             }
         }
-        channel.messages.push_back(message);
         channel.blocked_senders.push_back(tasklet.clone_ref(py));
         mark_tasklet_blocked(
             py,
@@ -2442,10 +2495,11 @@ fn send_channel_message(
             "Deadlock: channel send would block",
         ));
     };
-    let (receiver, receiver_runs_immediately) =
+    let (receiver, receiver_runs_immediately, payload_token) =
         match bridge_core_send(current_core_id, channel_core_id)? {
             CoreChannelOperationResult::Matched {
                 receiver,
+                payload_token,
                 preferred,
                 peer_runs_immediately,
                 balance,
@@ -2460,6 +2514,7 @@ fn send_channel_message(
                 (
                     channel.pop_blocked_receiver_by_core_id(py, receiver)?,
                     peer_runs_immediately,
+                    payload_token,
                 )
             }
             CoreChannelOperationResult::Blocked { .. } => {
@@ -2468,7 +2523,7 @@ fn send_channel_message(
                 ));
             }
         };
-    channel.messages.push_back(message);
+    channel.push_payload(payload_token, message);
     channel.update_close_state();
     channel.assert_core_mirror()?;
     drop(channel);
@@ -2532,12 +2587,20 @@ fn receive_channel_message(py: Python<'_>, channel_object: PyObject) -> PyResult
         ));
     }
 
-    if let Some(message) = channel.messages.pop_front() {
-        let mut sender_to_continue = None;
-        if !channel.blocked_senders.is_empty() {
+    if let Some(payload_token) = bridge_core_take_tasklet_payload_token(current_core_id)? {
+        let message = channel.pop_payload_by_token(payload_token)?;
+        channel.update_close_state();
+        channel.assert_core_mirror()?;
+        drop(channel);
+        return message.into_receive_result(py);
+    }
+
+    if !channel.blocked_senders.is_empty() {
+        let (message, sender, sender_runs_immediately) =
             match bridge_core_receive(current_core_id, channel_core_id)? {
                 CoreChannelOperationResult::Matched {
                     sender,
+                    payload_token,
                     preferred,
                     peer_runs_immediately,
                     balance,
@@ -2549,24 +2612,22 @@ fn receive_channel_message(py: Python<'_>, channel_object: PyObject) -> PyResult
                         ));
                     }
                     channel.set_balance_from_core(balance)?;
-                    sender_to_continue = Some((
+                    (
+                        channel.pop_payload_by_token(payload_token)?,
                         channel.pop_blocked_sender_by_core_id(py, sender)?,
                         peer_runs_immediately,
-                    ));
+                    )
                 }
                 CoreChannelOperationResult::Blocked { .. } => {
                     return Err(PyRuntimeError::new_err(
                         "scheduler core bridge expected channel receive to match",
                     ));
                 }
-            }
-        }
+            };
         channel.update_close_state();
         channel.assert_core_mirror()?;
         drop(channel);
-        if let Some((sender, sender_runs_immediately)) = sender_to_continue {
-            continue_channel_tasklet_after_transfer(py, &sender, sender_runs_immediately)?;
-        }
+        continue_channel_tasklet_after_transfer(py, &sender, sender_runs_immediately)?;
         return message.into_receive_result(py);
     }
 
@@ -2617,46 +2678,15 @@ fn receive_channel_message(py: Python<'_>, channel_object: PyObject) -> PyResult
             .map_err(|_| PyTypeError::new_err("expected scheduler.channel"))?;
         let mut channel = channel.try_borrow_mut()?;
         channel.ensure_valid()?;
-        let channel_core_id = channel.core_channel_id()?;
-        let Some(message) = channel.messages.pop_front() else {
+        let Some(payload_token) = bridge_core_take_tasklet_payload_token(current_core_id)? else {
             return Err(PyRuntimeError::new_err(
                 "Deadlock: channel receive would block",
             ));
         };
-        let mut sender_to_continue = None;
-        if !channel.blocked_senders.is_empty() {
-            match bridge_core_receive(current_core_id, channel_core_id)? {
-                CoreChannelOperationResult::Matched {
-                    sender,
-                    preferred,
-                    peer_runs_immediately,
-                    balance,
-                    ..
-                } => {
-                    if peer_runs_immediately && preferred != sender {
-                        return Err(PyRuntimeError::new_err(
-                            "scheduler core bridge selected an unexpected immediate receive peer",
-                        ));
-                    }
-                    channel.set_balance_from_core(balance)?;
-                    sender_to_continue = Some((
-                        channel.pop_blocked_sender_by_core_id(py, sender)?,
-                        peer_runs_immediately,
-                    ));
-                }
-                CoreChannelOperationResult::Blocked { .. } => {
-                    return Err(PyRuntimeError::new_err(
-                        "scheduler core bridge expected channel receive to match",
-                    ));
-                }
-            }
-        }
+        let message = channel.pop_payload_by_token(payload_token)?;
         channel.update_close_state();
         channel.assert_core_mirror()?;
         drop(channel);
-        if let Some((sender, sender_runs_immediately)) = sender_to_continue {
-            continue_channel_tasklet_after_transfer(py, &sender, sender_runs_immediately)?;
-        }
         return message.into_receive_result(py);
     }
 
@@ -2669,46 +2699,51 @@ fn receive_channel_message(py: Python<'_>, channel_object: PyObject) -> PyResult
     let mut channel = channel.try_borrow_mut()?;
     channel.ensure_valid()?;
     let channel_core_id = channel.core_channel_id()?;
-    let Some(message) = channel.messages.pop_front() else {
-        return Err(PyRuntimeError::new_err(
-            "Deadlock: channel receive would block",
-        ));
-    };
-    let mut sender_to_continue = None;
     if !channel.blocked_senders.is_empty() {
-        match bridge_core_receive(current_core_id, channel_core_id)? {
-            CoreChannelOperationResult::Matched {
-                sender,
-                preferred,
-                peer_runs_immediately,
-                balance,
-                ..
-            } => {
-                if peer_runs_immediately && preferred != sender {
+        let (message, sender, sender_runs_immediately) =
+            match bridge_core_receive(current_core_id, channel_core_id)? {
+                CoreChannelOperationResult::Matched {
+                    sender,
+                    payload_token,
+                    preferred,
+                    peer_runs_immediately,
+                    balance,
+                    ..
+                } => {
+                    if peer_runs_immediately && preferred != sender {
+                        return Err(PyRuntimeError::new_err(
+                            "scheduler core bridge selected an unexpected immediate receive peer",
+                        ));
+                    }
+                    channel.set_balance_from_core(balance)?;
+                    (
+                        channel.pop_payload_by_token(payload_token)?,
+                        channel.pop_blocked_sender_by_core_id(py, sender)?,
+                        peer_runs_immediately,
+                    )
+                }
+                CoreChannelOperationResult::Blocked { .. } => {
                     return Err(PyRuntimeError::new_err(
-                        "scheduler core bridge selected an unexpected immediate receive peer",
+                        "scheduler core bridge expected channel receive to match",
                     ));
                 }
-                channel.set_balance_from_core(balance)?;
-                sender_to_continue = Some((
-                    channel.pop_blocked_sender_by_core_id(py, sender)?,
-                    peer_runs_immediately,
-                ));
-            }
-            CoreChannelOperationResult::Blocked { .. } => {
-                return Err(PyRuntimeError::new_err(
-                    "scheduler core bridge expected channel receive to match",
-                ));
-            }
-        }
-    }
-    channel.update_close_state();
-    channel.assert_core_mirror()?;
-    drop(channel);
-    if let Some((sender, sender_runs_immediately)) = sender_to_continue {
+            };
+        channel.update_close_state();
+        channel.assert_core_mirror()?;
+        drop(channel);
         continue_channel_tasklet_after_transfer(py, &sender, sender_runs_immediately)?;
+        return message.into_receive_result(py);
     }
-    message.into_receive_result(py)
+    if let Some(payload_token) = bridge_core_take_tasklet_payload_token(current_core_id)? {
+        let message = channel.pop_payload_by_token(payload_token)?;
+        channel.update_close_state();
+        channel.assert_core_mirror()?;
+        drop(channel);
+        return message.into_receive_result(py);
+    }
+    Err(PyRuntimeError::new_err(
+        "Deadlock: channel receive would block",
+    ))
 }
 
 fn inject_channel_exception_for_blocked_receiver(
@@ -2735,12 +2770,12 @@ fn inject_channel_exception_for_blocked_receiver(
             "tasklet is not blocked on this channel receive",
         ));
     }
-    if let Ok(core_id) = tasklet_core_id(py, &tasklet_object) {
-        bridge_core_remove_tasklet_from_channel(core_id);
-    }
 
-    channel.messages.push_front(message);
-    channel.balance += 1;
+    let core_id = tasklet_core_id(py, &tasklet_object)?;
+    let _ = bridge_core_remove_tasklet_from_channel(core_id);
+    let payload_token = bridge_core_assign_tasklet_payload_token(core_id)?;
+    channel.push_payload(payload_token, message);
+    channel.refresh_balance_from_core();
     channel.update_close_state();
     channel.assert_core_mirror()?;
     drop(channel);
@@ -2766,17 +2801,18 @@ fn remove_tasklet_from_blocked_channel(
     channel.ensure_valid()?;
     match direction {
         Some(ChannelBlockDirection::Receive) => {
-            let before = channel.blocked_receivers.len();
-            channel
+            if let Some(index) = channel
                 .blocked_receivers
-                .retain(|receiver| receiver.as_ptr() != tasklet_ptr);
-            if channel.blocked_receivers.len() != before {
-                channel.balance += 1;
-                if let Some(tasklet_object) =
-                    borrowed_any_from_ptr(py, tasklet_ptr).map(|object| object.to_object(py))
-                {
+                .iter()
+                .position(|receiver| receiver.as_ptr() == tasklet_ptr)
+            {
+                let tasklet_object = channel.blocked_receivers.remove(index);
+                if let Some(tasklet_object) = tasklet_object {
                     if let Ok(core_id) = tasklet_core_id(py, &tasklet_object) {
-                        bridge_core_remove_tasklet_from_channel(core_id);
+                        let _ = bridge_core_remove_tasklet_from_channel(core_id);
+                        channel.refresh_balance_from_core();
+                    } else {
+                        channel.balance += 1;
                     }
                 }
             }
@@ -2787,21 +2823,17 @@ fn remove_tasklet_from_blocked_channel(
                 .iter()
                 .position(|sender| sender.as_ptr() == tasklet_ptr)
             {
-                channel.blocked_senders.remove(index);
-                let message_index = channel
-                    .messages
-                    .len()
-                    .saturating_sub(channel.blocked_senders.len() + 1)
-                    + index;
-                if message_index < channel.messages.len() {
-                    channel.messages.remove(message_index);
-                }
-                channel.balance -= 1;
-                if let Some(tasklet_object) =
-                    borrowed_any_from_ptr(py, tasklet_ptr).map(|object| object.to_object(py))
-                {
+                let tasklet_object = channel.blocked_senders.remove(index);
+                if let Some(tasklet_object) = tasklet_object {
                     if let Ok(core_id) = tasklet_core_id(py, &tasklet_object) {
-                        bridge_core_remove_tasklet_from_channel(core_id);
+                        if let Some(payload_token) =
+                            bridge_core_remove_tasklet_from_channel(core_id)
+                        {
+                            channel.remove_payload_by_token(payload_token);
+                        }
+                        channel.refresh_balance_from_core();
+                    } else {
+                        channel.balance -= 1;
                     }
                 }
             }
@@ -3303,11 +3335,14 @@ fn bridge_core_clear_channel(channel: CoreChannelId) -> PyResult<Vec<CoreTasklet
     with_bridge_core(|scheduler| scheduler.clear_channel(channel))
 }
 
-fn bridge_core_remove_tasklet_from_channel(tasklet: CoreTaskletId) {
+fn bridge_core_remove_tasklet_from_channel(tasklet: CoreTaskletId) -> Option<CorePayloadToken> {
     let mut scheduler = bridge_core_scheduler()
         .lock()
         .expect("scheduler core bridge lock poisoned");
-    let _ = scheduler.remove_tasklet_from_channel(tasklet);
+    scheduler
+        .remove_tasklet_from_channel(tasklet)
+        .ok()
+        .flatten()
 }
 
 fn bridge_core_channel_snapshot(channel: CoreChannelId) -> PyResult<CoreChannelSnapshot> {
@@ -3330,6 +3365,16 @@ fn bridge_core_receive(
     channel: CoreChannelId,
 ) -> PyResult<CoreChannelOperationResult> {
     with_bridge_core(|scheduler| scheduler.receive(receiver, channel))
+}
+
+fn bridge_core_take_tasklet_payload_token(
+    tasklet: CoreTaskletId,
+) -> PyResult<Option<CorePayloadToken>> {
+    with_bridge_core(|scheduler| scheduler.take_tasklet_payload_token(tasklet))
+}
+
+fn bridge_core_assign_tasklet_payload_token(tasklet: CoreTaskletId) -> PyResult<CorePayloadToken> {
+    with_bridge_core(|scheduler| scheduler.assign_tasklet_payload_token(tasklet))
 }
 
 fn tasklet_core_id(py: Python<'_>, tasklet_object: &PyObject) -> PyResult<CoreTaskletId> {

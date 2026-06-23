@@ -2269,6 +2269,19 @@ def render(evidence_dir: Path) -> str:
     </section>
 
     <section>
+      <div class="section-head">
+        <div>
+          <h2>Numbers By Scope</h2>
+          <p>This is the report's scope split: primary scheduler comparison first, then Rust-only scheduler pressure, network loopback context, separate resources results, and native resource/data formats.</p>
+        </div>
+        <span class="tag">No mixed claims</span>
+      </div>
+      <div class="scope-grid">
+        $performance_breakdown
+      </div>
+    </section>
+
+    <section>
       <h2>What Changed</h2>
       <div class="story-grid">
         $repo_conversion
@@ -2301,19 +2314,6 @@ def render(evidence_dir: Path) -> str:
       </div>
       <div class="workload-grid">
         $scheduler_workload_cards
-      </div>
-    </section>
-
-    <section>
-      <div class="section-head">
-        <div>
-          <h2>Performance Stats By Scope</h2>
-          <p>All resource-use and throughput stats are kept here with their claim boundary: matched scheduler comparison, Rust-only scheduler pressure, network loopback pressure, same-format resources, and native resource/data formats.</p>
-        </div>
-        <span class="tag">Scope split</span>
-      </div>
-      <div class="scope-grid">
-        $performance_breakdown
       </div>
     </section>
 

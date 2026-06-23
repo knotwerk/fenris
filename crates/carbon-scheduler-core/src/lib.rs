@@ -289,6 +289,9 @@ pub struct CoreChannelId(u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CoreRunQueueId(u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct CorePayloadToken(u64);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoreTaskletLifecycle {
     Runnable,
@@ -312,6 +315,7 @@ pub struct CoreBlockedOnChannel {
 pub struct CoreTaskletSnapshot {
     pub lifecycle: CoreTaskletLifecycle,
     pub blocked_on: Option<CoreBlockedOnChannel>,
+    pub pending_payload_token: Option<CorePayloadToken>,
     pub block_trap: bool,
     pub alive: bool,
     pub scheduled: bool,
@@ -336,11 +340,13 @@ pub enum CoreChannelOperationResult {
         channel: CoreChannelId,
         direction: CoreChannelDirection,
         balance: i64,
+        payload_token: Option<CorePayloadToken>,
     },
     Matched {
         sender: CoreTaskletId,
         receiver: CoreTaskletId,
         channel: CoreChannelId,
+        payload_token: CorePayloadToken,
         preferred: CoreTaskletId,
         peer_runs_immediately: bool,
         balance: i64,
@@ -387,6 +393,7 @@ impl Error for CoreSchedulerHandleError {}
 struct CoreTaskletState {
     lifecycle: CoreTaskletLifecycle,
     blocked_on: Option<CoreBlockedOnChannel>,
+    pending_payload_token: Option<CorePayloadToken>,
     block_trap: bool,
     alive: bool,
     scheduled: bool,
@@ -400,8 +407,14 @@ struct CoreChannelState {
     preference: i64,
     closing: bool,
     closed: bool,
-    blocked_senders: VecDeque<CoreTaskletId>,
+    blocked_senders: VecDeque<CoreBlockedSender>,
     blocked_receivers: VecDeque<CoreTaskletId>,
+}
+
+#[derive(Debug, Clone)]
+struct CoreBlockedSender {
+    tasklet: CoreTaskletId,
+    payload_token: CorePayloadToken,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -415,6 +428,7 @@ pub struct CoreScheduler {
     next_tasklet: u64,
     next_channel: u64,
     next_run_queue: u64,
+    next_payload_token: u64,
     tasklets: Vec<CoreTaskletState>,
     channels: Vec<CoreChannelState>,
     run_queues: Vec<CoreRunQueueState>,
@@ -431,6 +445,7 @@ impl CoreScheduler {
         self.tasklets.push(CoreTaskletState {
             lifecycle: CoreTaskletLifecycle::Runnable,
             blocked_on: None,
+            pending_payload_token: None,
             block_trap: false,
             alive: true,
             scheduled: false,
@@ -516,6 +531,23 @@ impl CoreScheduler {
         Ok(self.tasklet(tasklet)?.snapshot())
     }
 
+    pub fn take_tasklet_payload_token(
+        &mut self,
+        tasklet: CoreTaskletId,
+    ) -> Result<Option<CorePayloadToken>, CoreSchedulerHandleError> {
+        Ok(self.tasklet_mut(tasklet)?.pending_payload_token.take())
+    }
+
+    pub fn assign_tasklet_payload_token(
+        &mut self,
+        tasklet: CoreTaskletId,
+    ) -> Result<CorePayloadToken, CoreSchedulerHandleError> {
+        self.ensure_tasklet(tasklet)?;
+        let token = self.next_payload_token();
+        self.tasklet_mut(tasklet)?.pending_payload_token = Some(token);
+        Ok(token)
+    }
+
     pub fn update_tasklet_runtime_state(
         &mut self,
         tasklet: CoreTaskletId,
@@ -534,6 +566,7 @@ impl CoreScheduler {
         if !alive {
             tasklet_state.lifecycle = CoreTaskletLifecycle::Complete;
             tasklet_state.blocked_on = None;
+            tasklet_state.pending_payload_token = None;
             tasklet_state.scheduled = false;
         } else if tasklet_state.blocked_on.is_none() {
             tasklet_state.lifecycle = CoreTaskletLifecycle::Runnable;
@@ -687,7 +720,7 @@ impl CoreScheduler {
             .blocked_receivers
             .front()
             .copied()
-            .or_else(|| channel.blocked_senders.front().copied()))
+            .or_else(|| channel.blocked_senders.front().map(|sender| sender.tasklet)))
     }
 
     pub fn send(
@@ -699,8 +732,10 @@ impl CoreScheduler {
         self.ensure_channel(channel)?;
 
         if let Some(receiver) = self.channel_mut(channel)?.blocked_receivers.pop_front() {
+            let payload_token = self.next_payload_token();
             self.mark_runnable(sender)?;
             self.mark_runnable(receiver)?;
+            self.tasklet_mut(receiver)?.pending_payload_token = Some(payload_token);
             self.update_channel_close_state(channel)?;
             let balance = self.channel(channel)?.balance();
             let preference = self.channel(channel)?.preference;
@@ -708,6 +743,7 @@ impl CoreScheduler {
                 sender,
                 receiver,
                 channel,
+                payload_token,
                 preferred: if preference >= 1 { sender } else { receiver },
                 peer_runs_immediately: preference <= -1,
                 balance,
@@ -728,7 +764,13 @@ impl CoreScheduler {
             });
         }
 
-        self.channel_mut(channel)?.blocked_senders.push_back(sender);
+        let payload_token = self.next_payload_token();
+        self.channel_mut(channel)?
+            .blocked_senders
+            .push_back(CoreBlockedSender {
+                tasklet: sender,
+                payload_token,
+            });
         self.mark_blocked(sender, channel, CoreChannelDirection::Send)?;
         let balance = self.channel(channel)?.balance();
         Ok(CoreChannelOperationResult::Blocked {
@@ -736,6 +778,7 @@ impl CoreScheduler {
             channel,
             direction: CoreChannelDirection::Send,
             balance,
+            payload_token: Some(payload_token),
         })
     }
 
@@ -748,16 +791,21 @@ impl CoreScheduler {
         self.ensure_channel(channel)?;
 
         if let Some(sender) = self.channel_mut(channel)?.blocked_senders.pop_front() {
-            self.mark_runnable(sender)?;
+            self.mark_runnable(sender.tasklet)?;
             self.mark_runnable(receiver)?;
             self.update_channel_close_state(channel)?;
             let balance = self.channel(channel)?.balance();
             let preference = self.channel(channel)?.preference;
             return Ok(CoreChannelOperationResult::Matched {
-                sender,
+                sender: sender.tasklet,
                 receiver,
                 channel,
-                preferred: if preference >= 1 { sender } else { receiver },
+                payload_token: sender.payload_token,
+                preferred: if preference >= 1 {
+                    sender.tasklet
+                } else {
+                    receiver
+                },
                 peer_runs_immediately: preference >= 1,
                 balance,
             });
@@ -787,6 +835,7 @@ impl CoreScheduler {
             channel,
             direction: CoreChannelDirection::Receive,
             balance,
+            payload_token: None,
         })
     }
 
@@ -818,13 +867,18 @@ impl CoreScheduler {
                 .blocked_receivers
                 .drain(..)
                 .collect::<Vec<_>>();
-            removed.extend(channel_state.blocked_senders.drain(..));
+            let senders = channel_state
+                .blocked_senders
+                .drain(..)
+                .map(|sender| sender.tasklet);
+            removed.extend(senders);
             removed
         };
         for tasklet in &removed {
             let tasklet_state = self.tasklet_mut(*tasklet)?;
             tasklet_state.lifecycle = CoreTaskletLifecycle::Complete;
             tasklet_state.blocked_on = None;
+            tasklet_state.pending_payload_token = None;
             tasklet_state.alive = false;
             tasklet_state.scheduled = false;
             tasklet_state.paused = false;
@@ -836,22 +890,34 @@ impl CoreScheduler {
     pub fn remove_tasklet_from_channel(
         &mut self,
         tasklet: CoreTaskletId,
-    ) -> Result<(), CoreSchedulerHandleError> {
+    ) -> Result<Option<CorePayloadToken>, CoreSchedulerHandleError> {
         let Some(blocked_on) = self.tasklet(tasklet)?.blocked_on else {
-            return Ok(());
+            return Ok(None);
         };
-        match blocked_on.direction {
-            CoreChannelDirection::Send => self
-                .channel_mut(blocked_on.channel)?
-                .blocked_senders
-                .retain(|candidate| *candidate != tasklet),
-            CoreChannelDirection::Receive => self
-                .channel_mut(blocked_on.channel)?
-                .blocked_receivers
-                .retain(|candidate| *candidate != tasklet),
-        }
+        let payload_token = match blocked_on.direction {
+            CoreChannelDirection::Send => {
+                let channel = self.channel_mut(blocked_on.channel)?;
+                let mut removed_token = None;
+                channel.blocked_senders.retain(|candidate| {
+                    if candidate.tasklet == tasklet {
+                        removed_token = Some(candidate.payload_token);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                removed_token
+            }
+            CoreChannelDirection::Receive => {
+                self.channel_mut(blocked_on.channel)?
+                    .blocked_receivers
+                    .retain(|candidate| *candidate != tasklet);
+                None
+            }
+        };
         self.mark_runnable(tasklet)?;
-        self.update_channel_close_state(blocked_on.channel)
+        self.update_channel_close_state(blocked_on.channel)?;
+        Ok(payload_token)
     }
 
     fn ensure_tasklet(&self, tasklet: CoreTaskletId) -> Result<(), CoreSchedulerHandleError> {
@@ -875,6 +941,7 @@ impl CoreScheduler {
         let tasklet_state = self.tasklet_mut(tasklet)?;
         tasklet_state.lifecycle = CoreTaskletLifecycle::Blocked;
         tasklet_state.blocked_on = Some(CoreBlockedOnChannel { channel, direction });
+        tasklet_state.pending_payload_token = None;
         tasklet_state.alive = true;
         tasklet_state.scheduled = false;
         tasklet_state.paused = false;
@@ -887,6 +954,12 @@ impl CoreScheduler {
         tasklet_state.blocked_on = None;
         tasklet_state.alive = true;
         Ok(())
+    }
+
+    fn next_payload_token(&mut self) -> CorePayloadToken {
+        let token = CorePayloadToken(self.next_payload_token);
+        self.next_payload_token += 1;
+        token
     }
 
     fn update_channel_close_state(
@@ -996,7 +1069,11 @@ impl CoreChannelState {
             closing: self.closing,
             closed: self.closed,
             balance: self.balance(),
-            blocked_senders: self.blocked_senders.iter().copied().collect(),
+            blocked_senders: self
+                .blocked_senders
+                .iter()
+                .map(|sender| sender.tasklet)
+                .collect(),
             blocked_receivers: self.blocked_receivers.iter().copied().collect(),
         }
     }
@@ -1007,6 +1084,7 @@ impl CoreTaskletState {
         CoreTaskletSnapshot {
             lifecycle: self.lifecycle,
             blocked_on: self.blocked_on,
+            pending_payload_token: self.pending_payload_token,
             block_trap: self.block_trap,
             alive: self.alive,
             scheduled: self.scheduled,
@@ -3795,6 +3873,7 @@ mod tests {
                 channel,
                 direction: CoreChannelDirection::Send,
                 balance: 1,
+                payload_token: Some(CorePayloadToken(0)),
             })
         );
         assert_eq!(
@@ -3816,6 +3895,7 @@ mod tests {
                 sender,
                 receiver,
                 channel,
+                payload_token: CorePayloadToken(0),
                 preferred: receiver,
                 peer_runs_immediately: false,
                 balance: 0,
@@ -3853,6 +3933,7 @@ mod tests {
                 channel,
                 direction: CoreChannelDirection::Receive,
                 balance: -1,
+                payload_token: None,
             })
         );
         assert_eq!(scheduler.queue_front(channel), Ok(Some(receiver)));
@@ -3870,11 +3951,24 @@ mod tests {
                 sender,
                 receiver,
                 channel,
+                payload_token: CorePayloadToken(0),
                 preferred: sender,
                 peer_runs_immediately: false,
                 balance: 0,
             })
         );
+        assert_eq!(
+            scheduler
+                .tasklet_snapshot(receiver)
+                .expect("receiver snapshot")
+                .pending_payload_token,
+            Some(CorePayloadToken(0))
+        );
+        assert_eq!(
+            scheduler.take_tasklet_payload_token(receiver),
+            Ok(Some(CorePayloadToken(0)))
+        );
+        assert_eq!(scheduler.take_tasklet_payload_token(receiver), Ok(None));
         assert_eq!(scheduler.tasklet_blocked_on(receiver), Ok(None));
     }
 
@@ -3895,6 +3989,7 @@ mod tests {
                 sender,
                 receiver,
                 channel: receiver_preferred_channel,
+                payload_token: CorePayloadToken(0),
                 preferred: receiver,
                 peer_runs_immediately: true,
                 balance: 0,
@@ -3914,6 +4009,7 @@ mod tests {
                 sender,
                 receiver,
                 channel: sender_preferred_channel,
+                payload_token: CorePayloadToken(1),
                 preferred: sender,
                 peer_runs_immediately: true,
                 balance: 0,
@@ -3933,6 +4029,7 @@ mod tests {
                 sender,
                 receiver,
                 channel: neutral_send_channel,
+                payload_token: CorePayloadToken(2),
                 preferred: receiver,
                 peer_runs_immediately: false,
                 balance: 0,
@@ -3952,6 +4049,7 @@ mod tests {
                 sender,
                 receiver,
                 channel: neutral_receive_channel,
+                payload_token: CorePayloadToken(3),
                 preferred: receiver,
                 peer_runs_immediately: false,
                 balance: 0,
@@ -4023,9 +4121,10 @@ mod tests {
         assert!(!closing.closed);
         assert_eq!(closing.balance, 1);
 
-        scheduler
-            .remove_tasklet_from_channel(sender)
-            .expect("blocked sender removed");
+        assert_eq!(
+            scheduler.remove_tasklet_from_channel(sender),
+            Ok(Some(CorePayloadToken(0)))
+        );
         let closed = scheduler.channel_snapshot(channel).expect("snapshot");
         assert!(closed.closing);
         assert!(closed.closed);
@@ -4064,6 +4163,7 @@ mod tests {
             CoreTaskletSnapshot {
                 lifecycle: CoreTaskletLifecycle::Runnable,
                 blocked_on: None,
+                pending_payload_token: None,
                 block_trap: false,
                 alive: true,
                 scheduled: false,
@@ -4093,6 +4193,7 @@ mod tests {
             CoreTaskletSnapshot {
                 lifecycle: CoreTaskletLifecycle::Runnable,
                 blocked_on: None,
+                pending_payload_token: None,
                 block_trap: false,
                 alive: true,
                 scheduled: true,
@@ -4109,6 +4210,7 @@ mod tests {
             CoreTaskletSnapshot {
                 lifecycle: CoreTaskletLifecycle::Complete,
                 blocked_on: None,
+                pending_payload_token: None,
                 block_trap: false,
                 alive: false,
                 scheduled: false,
@@ -4139,6 +4241,7 @@ mod tests {
             CoreTaskletSnapshot {
                 lifecycle: CoreTaskletLifecycle::Runnable,
                 blocked_on: None,
+                pending_payload_token: None,
                 block_trap: false,
                 alive: true,
                 scheduled: false,
@@ -4157,6 +4260,7 @@ mod tests {
             CoreTaskletSnapshot {
                 lifecycle: CoreTaskletLifecycle::Runnable,
                 blocked_on: None,
+                pending_payload_token: None,
                 block_trap: false,
                 alive: true,
                 scheduled: false,
