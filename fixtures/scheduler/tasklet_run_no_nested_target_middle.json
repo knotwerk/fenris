@@ -5,6 +5,10 @@
     "repo": "/data/repos/fenris/carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_scheduler.py::TestTaskletRunOrderBase::test_tasklet_run_order_2"
+    ],
+    "legacy_behavior": [
+      "With nested tasklets disabled, Tasklet.run() reinserts the target to run next and schedules the current tasklet with FRONT_PLUS_ONE semantics.",
+      "The selected middle tasklet runs before the original front tasklet, and the original tail remains behind that front tasklet."
     ]
   },
   "scenario": {
@@ -45,6 +49,16 @@
       "op": "run_tasklet",
       "tasklet": "t2"
     }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      { "kind": "scheduler.switch", "from": "main", "to": "t2", "reason": "run_tasklet" },
+      { "kind": "tasklet.observed", "actor": "t2", "completed": ["t2"] },
+      { "kind": "scheduler.switch", "from": "main", "to": "t1", "reason": "next_runnable" },
+      { "kind": "tasklet.observed", "actor": "t1", "completed": ["t2", "t1"] },
+      { "kind": "scheduler.switch", "from": "main", "to": "t3", "reason": "next_runnable" },
+      { "kind": "tasklet.observed", "actor": "t3", "completed": ["t2", "t1", "t3"] }
+    ]
   },
   "events": [
     { "seq": 0, "kind": "scheduler.start", "actor": "main" },

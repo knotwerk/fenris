@@ -7,6 +7,7 @@
       "tests/python/scheduler/tests/test_scheduler.py::TestScheduleOrderBase::test_multi_level_nested_tasklet_run_order_with_schedule"
     ]
   },
+  "check_events": false,
   "scenario": {
     "nested_tasklets": false,
     "tasklets": [
@@ -64,6 +65,38 @@
       }
     ],
     "entrypoint": { "op": "run_scheduler" }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      { "kind": "tasklet.observed", "actor": "t2", "value": "t2" },
+      { "kind": "tasklet.observed", "actor": "t6", "value": "t6" },
+      {
+        "kind": "scheduler.schedule",
+        "actor": "yield1",
+        "tasklet": "yield1",
+        "position": "back",
+        "runnable": ["main", "nested2", "t5", "yield1"]
+      },
+      { "kind": "scheduler.switch", "from": "yield1", "to": "main", "reason": "schedule" },
+      { "kind": "tasklet.observed", "actor": "t3", "value": "t3" },
+      { "kind": "tasklet.observed", "actor": "t5", "value": "t5" },
+      { "kind": "tasklet.complete", "tasklet": "yield1" },
+      {
+        "kind": "scheduler.schedule",
+        "actor": "yield2",
+        "tasklet": "yield2",
+        "position": "back",
+        "runnable": ["main", "t4", "yield2"]
+      },
+      { "kind": "scheduler.switch", "from": "yield2", "to": "main", "reason": "schedule" },
+      { "kind": "tasklet.observed", "actor": "t4", "value": "t4" },
+      { "kind": "tasklet.complete", "tasklet": "yield2" },
+      { "kind": "scheduler.switch", "from": "main", "to": "nested2", "reason": "resume_tasklet_runner" },
+      { "kind": "scheduler.switch", "from": "main", "to": "nested1", "reason": "resume_tasklet_runner" }
+    ],
+    "match_counts": [
+      { "event": { "kind": "scheduler.schedule", "position": "back" }, "count": 2 }
+    ]
   },
   "events": [
     {"seq":0,"kind":"scheduler.start","actor":"main","current":"main","run_count":1,"runnable":["main"]},

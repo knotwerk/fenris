@@ -15,7 +15,7 @@ Rust target:
 ## Consolidated Findings
 
 - `SCH-TASKLET-001`: tasklet lifecycle needs explicit Rust state transitions.
-- `SCH-TASKLET-002`: targeted `run`, nested mode, direct switch success, switch-trap rejection, and blocked/dead direct run/switch no-mutation are covered by current fixtures; wrong-thread behavior, Python object/API details, and `FRONT_PLUS_ONE` remain outside the pure-core fixture slice.
+- `SCH-TASKLET-002`: targeted `run`, nested mode, non-nested `FRONT_PLUS_ONE` boundary, direct switch success, switch-trap rejection, and blocked/dead direct run/switch no-mutation are covered by current fixtures; wrong-thread behavior and Python object/API details remain outside the pure-core fixture slice.
 - `SCH-TASKLET-003`: blocked membership must be a single scheduler-owned invariant.
 - `SCH-TASKLET-004`: kill needs symbolic immediate/pending core events.
 - `SCH-TASKLET-005`: throw/exception transfer needs symbolic payloads before FFI traceback work.

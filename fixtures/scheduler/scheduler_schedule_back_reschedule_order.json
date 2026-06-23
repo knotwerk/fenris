@@ -1,0 +1,63 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "scheduler_schedule_back_reschedule_order",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_scheduler.py::TestSchedule::test_schedule",
+      "tests/python/scheduler/tests/test_scheduler.py::TestScheduleOrderBase::test_nested_tasklet_run_order_with_schedule"
+    ],
+    "legacy_behavior": [
+      "scheduler.schedule() marks the current tasklet for BACK reschedule before yielding.",
+      "The rescheduled tasklet resumes after runnable tasklets that were already behind it."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "nested_tasklets": true,
+    "tasklets": [
+      {
+        "id": "t1",
+        "body": [
+          { "op": "append", "target": "completed", "value": "t1a" },
+          { "op": "schedule" },
+          { "op": "append", "target": "completed", "value": "t1b" }
+        ]
+      },
+      { "id": "t2", "body": [{ "op": "append", "target": "completed", "value": "t2" }] },
+      { "id": "t3", "body": [{ "op": "append", "target": "completed", "value": "t3" }] }
+    ],
+    "entrypoint": { "op": "run_scheduler" }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      { "kind": "tasklet.observed", "actor": "t1", "value": "t1a" },
+      {
+        "kind": "scheduler.schedule",
+        "actor": "t1",
+        "tasklet": "t1",
+        "position": "back",
+        "runnable": ["main", "t2", "t3", "t1"]
+      },
+      { "kind": "scheduler.switch", "from": "t1", "to": "main", "reason": "schedule" },
+      { "kind": "tasklet.observed", "actor": "t2", "value": "t2" },
+      { "kind": "tasklet.observed", "actor": "t3", "value": "t3" },
+      { "kind": "scheduler.switch", "from": "main", "to": "t1", "reason": "next_runnable" },
+      { "kind": "tasklet.observed", "actor": "t1", "value": "t1b" },
+      { "kind": "tasklet.complete", "tasklet": "t1" }
+    ],
+    "match_counts": [
+      { "event": { "kind": "scheduler.schedule", "position": "back" }, "count": 1 }
+    ]
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": ["t1a", "t2", "t3", "t1b"],
+    "tasklets": {
+      "t1": { "alive": false, "scheduled": false, "times_switched_to": 2 },
+      "t2": { "alive": false, "scheduled": false },
+      "t3": { "alive": false, "scheduled": false }
+    }
+  }
+}

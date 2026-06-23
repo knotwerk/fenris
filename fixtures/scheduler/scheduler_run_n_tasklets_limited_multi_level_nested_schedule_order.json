@@ -74,6 +74,11 @@
       "steps": [
         { "op": "run_scheduler_n", "count": 1 },
         { "op": "run_scheduler_n", "count": 1 },
+        { "op": "run_scheduler_n", "count": 1 },
+        { "op": "run_scheduler_n", "count": 1 },
+        { "op": "run_scheduler_n", "count": 1 },
+        { "op": "run_scheduler_n", "count": 1 },
+        { "op": "run_scheduler_n", "count": 1 },
         { "op": "run_scheduler_n", "count": 1 }
       ]
     }
@@ -84,15 +89,35 @@
       { "kind": "tasklet.observed", "actor": "t1", "value": "t1" },
       { "kind": "scheduler.run.start", "limit": 1 },
       { "kind": "tasklet.observed", "actor": "t2", "value": "t2" },
+      {
+        "kind": "scheduler.schedule",
+        "actor": "yield1",
+        "position": "back",
+        "runnable": ["main", "nested2", "t5", "t6", "yield1"]
+      },
+      { "kind": "scheduler.run.start", "limit": 1 },
       { "kind": "tasklet.observed", "actor": "t3", "value": "t3" },
+      {
+        "kind": "scheduler.schedule",
+        "actor": "yield2",
+        "position": "back",
+        "runnable": ["main", "t4", "t5", "t6", "yield1", "yield2"]
+      },
+      { "kind": "scheduler.run.start", "limit": 1 },
       { "kind": "tasklet.observed", "actor": "t4", "value": "t4" },
+      { "kind": "scheduler.run.start", "limit": 1 },
       { "kind": "tasklet.observed", "actor": "t5", "value": "t5" },
       { "kind": "scheduler.run.start", "limit": 1 },
-      { "kind": "tasklet.observed", "actor": "t6", "value": "t6" }
+      { "kind": "tasklet.observed", "actor": "t6", "value": "t6" },
+      { "kind": "scheduler.run.start", "limit": 1 },
+      { "kind": "tasklet.complete", "tasklet": "yield1" },
+      { "kind": "scheduler.run.start", "limit": 1 },
+      { "kind": "tasklet.complete", "tasklet": "yield2" }
     ],
     "match_counts": [
-      { "event": { "kind": "scheduler.run.start" }, "count": 3 },
-      { "event": { "kind": "scheduler.run.start", "limit": 1 }, "count": 3 }
+      { "event": { "kind": "scheduler.run.start" }, "count": 8 },
+      { "event": { "kind": "scheduler.run.start", "limit": 1 }, "count": 8 },
+      { "event": { "kind": "scheduler.schedule", "position": "back" }, "count": 2 }
     ]
   },
   "expect": {

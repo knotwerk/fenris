@@ -1845,14 +1845,20 @@ impl Runtime {
             }
             Operation::Schedule => {
                 self.advance_pc(tasklet)?;
+                self.schedule_new_tasklet(tasklet)?;
                 self.emit(
                     "scheduler.schedule",
                     [
                         ("actor", json!(tasklet)),
+                        ("tasklet", json!(tasklet)),
+                        ("position", json!("back")),
                         ("run_count", json!(self.run_count())),
+                        ("runnable", json!(self.runnable_snapshot())),
                     ],
                 );
-                Ok(StepOutcome::Continue)
+                self.switch(tasklet, "main", "schedule");
+                self.current = String::from("main");
+                Ok(StepOutcome::Paused)
             }
             Operation::ScheduleRemove => {
                 self.advance_pc(tasklet)?;

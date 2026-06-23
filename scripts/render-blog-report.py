@@ -1012,7 +1012,7 @@ def resource_surface(workload: str) -> str:
 
 def resource_port_rows(rows: list[dict]) -> str:
     if not rows:
-        return '<tr><td colspan="6">No comparable resource rows available.</td></tr>'
+        return '<tr><td colspan="7">No comparable resource rows available.</td></tr>'
     rendered = []
     for row in sorted(rows, key=lambda item: float(item.get("speedup") or 0), reverse=True):
         workload = str(row.get("workload") or "")
@@ -1025,6 +1025,10 @@ def resource_port_rows(rows: list[dict]) -> str:
             path_value(row, "/legacy_process_stats/cpu_burn_effective_ms/mean"),
             path_value(row, "/rust_process_stats/cpu_burn_effective_ms/mean"),
         )
+        rss_reduction = reduction_percent(
+            path_value(row, "/legacy_process_stats/max_rss_kb/p95"),
+            path_value(row, "/rust_process_stats/max_rss_kb/p95"),
+        )
         parity = row.get("parity_status") or row.get("claim_eligibility") or "n/a"
         rendered.append(
             "<tr>"
@@ -1032,7 +1036,8 @@ def resource_port_rows(rows: list[dict]) -> str:
             f"<td>{h(resource_surface(workload))}</td>"
             f"<td><strong>{fmt_directional_ratio(row.get('speedup'))}</strong><small>same legacy-compatible operation</small></td>"
             f"<td><strong>{fmt_ms_from_us(row.get('legacy_duration_us'))} -> {fmt_ms_from_us(row.get('rust_duration_us'))}</strong><small>legacy wall vs Rust wall</small></td>"
-            f"<td><strong>{fmt_signed_percent(p99_reduction)}</strong><small>p99 tail; CPU burn {fmt_signed_percent(cpu_reduction)}</small></td>"
+            f"<td><strong>{fmt_signed_percent(p99_reduction)}</strong><small>p99 tail latency</small></td>"
+            f"<td><strong>{fmt_signed_percent(cpu_reduction)}</strong><small>CPU burn; memory {fmt_signed_percent(rss_reduction)}</small></td>"
             f"<td><small>{h(parity)}</small></td>"
             "</tr>"
         )
@@ -2111,7 +2116,7 @@ def render(evidence_dir: Path) -> str:
   <header>
     <div class="hero">
       <p class="eyebrow">Carbon scheduler evidence</p>
-      <h1>Carbon Scheduler Rewrite: lab parity is measurable, and the performance gap is quantified.</h1>
+      <h1>Carbon Scheduler Rewrite: scheduler parity is measurable, and the performance gap is quantified.</h1>
       <p class="lead">The primary comparison is the scheduler repo: legacy C++ scheduler extension versus the Rust scheduler bridge through the same Python tasklet/channel API. Resource performance is included as clearly separated supporting evidence.</p>
       <div class="metric-grid">
         $hero_cards
@@ -2152,6 +2157,19 @@ def render(evidence_dir: Path) -> str:
       <h2>What Changed</h2>
       <div class="story-grid">
         $repo_conversion
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>What Was Tested</h2>
+          <p>The scheduler rows exercise tasklet orchestration, channel rendezvous, fanout, and a synthetic zone tick through the same public API. Resource rows are separate CLI/catalog workloads.</p>
+        </div>
+        <span class="tag">Workload scope</span>
+      </div>
+      <div class="tested-grid">
+        $tested_workloads
       </div>
     </section>
 
@@ -2203,7 +2221,8 @@ def render(evidence_dir: Path) -> str:
               <th>Compatibility surface</th>
               <th>Same-format result</th>
               <th>Wall time</th>
-              <th>Tail and CPU</th>
+              <th>Tail</th>
+              <th>CPU and memory</th>
               <th>Parity</th>
             </tr>
           </thead>
@@ -2411,6 +2430,7 @@ def render(evidence_dir: Path) -> str:
             scalability_evidence,
         ),
         repo_conversion=repo_conversion_cards(),
+        tested_workloads=tested_workloads(rows + resource_rows),
         scheduler_cards=summary_cards(scheduler_summary, subject="Scheduler"),
         performance_breakdown=performance_breakdown_cards(
             scheduler_summary,

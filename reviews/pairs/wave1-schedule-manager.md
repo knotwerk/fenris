@@ -15,7 +15,7 @@ Rust target:
 ## Consolidated Findings
 
 - `SCH-CORE-001`: done; the scheduler state model and core fixture gate cover main/current identity, runnable order, insert/remove, switch counts, and run-count parity for the current core slice.
-- `SCH-CORE-002`: `BACK`, `FRONT_PLUS_ONE`, `schedule_remove`, and targeted-run boundary behavior need implementation and fixtures.
+- `SCH-CORE-002`: `BACK` reschedule and the non-nested `FRONT_PLUS_ONE` targeted-run boundary now have fixture coverage; broader targeted-run edge cases, callback identity, and final core ownership still need implementation and fixtures.
 - `SCH-CORE-003`: done; immediate receive/send deadlocks and receive/send after runnable-child drain are covered by event-checked scheduler fixtures.
 - `SCH-CORE-004`: nested parent links need a pure core model independent of Greenlet.
 - `SCH-CORE-005`: partial; bounded `run_n_tasklets` fixtures and timeout counters exist, while real monotonic timeout policy remains open.

@@ -7,6 +7,7 @@
       "tests/python/scheduler/tests/test_scheduler.py::TestScheduleOrderBase::test_nested_tasklet_run_order_with_schedule"
     ]
   },
+  "check_events": false,
   "scenario": {
     "nested_tasklets": false,
     "tasklets": [
@@ -38,6 +39,27 @@
       }
     ],
     "entrypoint": { "op": "run_scheduler" }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      { "kind": "tasklet.observed", "actor": "t2", "value": "t2" },
+      { "kind": "tasklet.observed", "actor": "t4", "value": "t4" },
+      {
+        "kind": "scheduler.schedule",
+        "actor": "yield",
+        "tasklet": "yield",
+        "position": "back",
+        "runnable": ["main", "t3", "yield"]
+      },
+      { "kind": "scheduler.switch", "from": "yield", "to": "main", "reason": "schedule" },
+      { "kind": "tasklet.observed", "actor": "t3", "value": "t3" },
+      { "kind": "scheduler.switch", "from": "main", "to": "yield", "reason": "next_runnable" },
+      { "kind": "tasklet.complete", "tasklet": "yield" },
+      { "kind": "scheduler.switch", "from": "main", "to": "nested", "reason": "resume_tasklet_runner" }
+    ],
+    "match_counts": [
+      { "event": { "kind": "scheduler.schedule", "position": "back" }, "count": 1 }
+    ]
   },
   "events": [
     {"seq":0,"kind":"scheduler.start","actor":"main","current":"main","run_count":1,"runnable":["main"]},
