@@ -22,6 +22,7 @@ run_xtask() {
 case "${command}" in
   all | native-evidence)
     run_xtask bench "$@"
+    run_xtask bench-scheduler-comparison --tier quick --samples 5
     run_xtask bench-scalability --tier quick --families scheduler
     run_xtask io-workloads "$@"
     run_xtask report-progress

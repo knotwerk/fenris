@@ -188,10 +188,12 @@ names. The current Rust gate parses this v0 envelope with
 
 `scripts/carbon-native-bench.sh` records release-native evidence with
 `RUSTFLAGS` including `-C target-cpu=native`. Its default `all` mode runs the
-Tier 1 benchmark evidence, IO workload evidence, and progress report refresh.
-The benchmark evidence now includes a process-measured Rust scheduler core row
-with latency, throughput, CPU burn, CPU percent, and RSS. That scheduler row is
-resource evidence only until a matched legacy scheduler process baseline exists.
+Tier 1 benchmark evidence, matched scheduler comparison evidence, scheduler
+pressure evidence, IO workload evidence, and progress report refresh. The
+scheduler comparison evidence now records matched legacy C++ scheduler vs Rust
+scheduler bridge lab rows with semantic checksums, throughput, p99, CPU burn,
+CPU percent, and RSS; those rows are lab evidence until a real game-environment
+workload exists.
 For resources process comparisons, `bench-tier-local.json` now records
 `optimization_readiness`, selected legacy resources CLI paths, surrounding
 CMake build type, and `legacy_known_non_debug`. On this checkout those selected

@@ -18,6 +18,46 @@ DEFAULT_OUTPUT = Path("target/carbon/report/blog.html")
 
 
 WORKLOAD_LABELS = {
+    "runnable_tasklets_128": (
+        "Runnable tasklets, 128",
+        "Schedule and drain 128 deterministic tasklets through the public scheduler API.",
+    ),
+    "runnable_tasklets_1024": (
+        "Runnable tasklets, 1,024",
+        "Scale runnable queue pressure through the same legacy and Rust Python API.",
+    ),
+    "runnable_tasklets_4096": (
+        "Runnable tasklets, 4,096",
+        "Large runnable queue drain pressure for the full lab tier.",
+    ),
+    "channel_rendezvous_32": (
+        "Channel rendezvous, 32 pairs",
+        "Pair blocked receivers and senders through scheduler channels.",
+    ),
+    "channel_rendezvous_256": (
+        "Channel rendezvous, 256 pairs",
+        "Scale channel handoff pressure to 256 sender/receiver pairs.",
+    ),
+    "channel_rendezvous_1024": (
+        "Channel rendezvous, 1,024 pairs",
+        "Large sender/receiver rendezvous pressure for the full lab tier.",
+    ),
+    "fanout_pipeline_256b": (
+        "Fanout pipeline",
+        "Synthetic message fanout across worker tasklets and scheduler channels.",
+    ),
+    "fanout_pipeline_4096b": (
+        "Fanout pipeline, 4 KiB payloads",
+        "Payload-heavy synthetic fanout across worker tasklets.",
+    ),
+    "zone_tick_study_small": (
+        "Fake game zone tick",
+        "Synthetic zones, entity updates, network-like messages, and aggregation.",
+    ),
+    "zone_tick_study_large": (
+        "Fake game zone tick, large",
+        "Larger synthetic game loop for tail and resource pressure.",
+    ),
     "create_group_directory_yaml": (
         "Create resource group",
         "Scan a resource directory and write the group manifest.",
@@ -124,6 +164,15 @@ def fmt_ratio(value: object) -> str:
     return f"{amount:.2f}x"
 
 
+def fmt_directional_ratio(value: object, faster_label: str = "faster", slower_label: str = "slower") -> str:
+    amount = number(value)
+    if amount is None or amount == 0:
+        return "n/a"
+    if amount >= 1:
+        return f"{amount:.2f}x {faster_label}"
+    return f"{1.0 / amount:.2f}x {slower_label}"
+
+
 def fmt_percent(value: object) -> str:
     amount = number(value)
     if amount is None:
@@ -180,6 +229,14 @@ def comparable_rows(bench: dict) -> list[dict]:
     ]
 
 
+def scheduler_comparable_rows(evidence: dict) -> list[dict]:
+    return [
+        row
+        for row in evidence.get("comparisons", []) or []
+        if row.get("comparability") == "comparable_scheduler_python_api_process_to_process"
+    ]
+
+
 def report_is_publishable(bench: dict, rows: list[dict]) -> bool:
     readiness = bench.get("optimization_readiness") or {}
     return (
@@ -189,6 +246,15 @@ def report_is_publishable(bench: dict, rows: list[dict]) -> bool:
         and bench.get("build_profile") == "release-native"
         and bench.get("target_cpu_native") is True
         and bench.get("debug_assertions") is False
+    )
+
+
+def scheduler_report_is_publishable(evidence: dict, rows: list[dict]) -> bool:
+    return (
+        bool(rows)
+        and evidence.get("status") == "pass"
+        and evidence.get("report_ready") is True
+        and all((row.get("semantic") or {}).get("mismatch_count") == 0 for row in rows)
     )
 
 
@@ -251,19 +317,19 @@ def executive_cards(summary: dict) -> str:
     return "\n".join(
         [
             metric_card(
-                "Wall latency",
-                fmt_ratio(summary["median_speedup"]),
-                f"median uplift across {summary['rows']} old-vs-Rust workloads",
+                "Scheduler throughput",
+                fmt_directional_ratio(summary["median_speedup"]),
+                f"median old-vs-Rust result across {summary['rows']} lab workloads",
             ),
             metric_card(
-                "Best uplift",
-                fmt_ratio(summary["best_speedup"]),
-                "fastest measured workload",
+                "Best result",
+                fmt_directional_ratio(summary["best_speedup"]),
+                "best measured scheduler workload",
             ),
             metric_card(
                 "Tail latency",
                 fmt_signed_percent(summary["median_p99_reduction"]),
-                f"median p99 reduction; improved in {summary['p99_better']}/{summary['rows']}",
+                f"median p99 change; lower in {summary['p99_better']}/{summary['rows']}",
             ),
             metric_card(
                 "Memory cost",
@@ -278,7 +344,7 @@ def executive_cards(summary: dict) -> str:
             metric_card(
                 "Coverage",
                 f"{summary['equal_or_faster']}/{summary['rows']}",
-                f"equal or faster wall time; {summary['materially_faster']} materially faster",
+                f"Rust equal or faster wall time; {summary['materially_faster']} materially faster",
             ),
         ]
     )
@@ -319,7 +385,7 @@ def result_rows(rows: list[dict]) -> str:
         rendered.append(
             "<tr>"
             f"<td><strong>{h(title)}</strong><small>{h(description)}</small></td>"
-            f"<td><strong>{fmt_ratio(speedup)}</strong><div class=\"bar\"><span style=\"width:{bar_width(speedup, max_speedup):.1f}%\"></span></div>"
+            f"<td><strong>{fmt_directional_ratio(speedup)}</strong><div class=\"bar\"><span style=\"width:{bar_width(speedup, max_speedup):.1f}%\"></span></div>"
             f"<small>{fmt_ms_from_us(row.get('legacy_duration_us'))} old vs {fmt_ms_from_us(row.get('rust_duration_us'))} Rust</small></td>"
             f"<td><strong>{fmt_signed_percent(p99_reduction)}</strong>"
             f"<small>{fmt_ms_from_us(path_value(row, '/legacy_sample_stats_us/p99'))} old vs {fmt_ms_from_us(path_value(row, '/rust_sample_stats_us/p99'))} Rust</small></td>"
@@ -336,20 +402,20 @@ def result_rows(rows: list[dict]) -> str:
 def architecture_section() -> str:
     items = [
         (
-            "Rust-owned core behavior",
-            "The rewrite moves resource operations into Rust code with explicit ownership and predictable process boundaries.",
+            "Same scheduler API",
+            "The comparison runs the legacy C++ extension and the Rust scheduler bridge through the same Python tasklet/channel API.",
         ),
         (
-            "Compatibility-preserving CLI surface",
-            "The measured Rust path keeps equivalent command behavior for the tested resource workflows.",
+            "Rust bridge under test",
+            "The measured Rust path keeps the legacy import surface while routing covered tasklet, channel, and run-queue behavior through Rust-owned scheduler state.",
         ),
         (
-            "Native Linux validation",
-            "Old and Rust binaries now run on this Linux host, so performance can be compared locally instead of relying on unsupported x64 assumptions.",
+            "Native Linux baseline",
+            "The legacy scheduler now builds and runs on this host, including Python tests and C API CTest, so old-vs-Rust scheduler comparisons can run locally.",
         ),
         (
-            "Measurable release pipeline",
-            "Both sides are built as optimized binaries, and each row records wall time, p99, throughput, CPU, and peak memory.",
+            "Lab game study",
+            "Synthetic tasklet, channel, fanout, and zone-tick workloads stress orchestration while the real game-environment run remains the next production gate.",
         ),
     ]
     return "\n".join(
@@ -362,7 +428,8 @@ SCHEDULER_GATES = [
     ("legacy-scheduler.json", "Legacy Python/C API baseline"),
     ("rust-scheduler-python.json", "Rust Python/C API bridge"),
     ("io-workloads.json", "IO/socket/SSL orchestration"),
-    ("bench-tier-local.json", "Matched scheduler benchmarks"),
+    ("scheduler-comparison.json", "Matched scheduler comparison"),
+    ("scalability-matrix.json", "Pressure matrix"),
 ]
 
 
@@ -405,7 +472,7 @@ def scheduler_story_section(items: list[dict]) -> str:
     cards = [
         (
             "Evidence status",
-            f"Scheduler and distributed orchestration claims are excluded from this report. {open_count} scheduler-related evidence gates are still not report-ready.",
+            f"This report publishes lab scheduler comparison evidence only. {open_count} scheduler-related evidence gates are still not report-ready for broader production claims.",
         ),
         (
             "What remains",
@@ -413,7 +480,7 @@ def scheduler_story_section(items: list[dict]) -> str:
         ),
         (
             "Publish rule",
-            "Scheduler uplift returns to the CEO report only when full-orchestration parity is green; resource pipeline results remain the only current old-vs-Rust performance claim.",
+            "The measured rows can support lab conclusions; production scheduler claims wait for a real game-environment trace or harness.",
         ),
     ]
     return "\n".join(
@@ -439,6 +506,22 @@ def scheduler_gate_rows(items: list[dict]) -> str:
 
 def tested_workloads(rows: list[dict]) -> str:
     grouped = [
+        ("Tasklet scheduling", [
+            "runnable_tasklets_128",
+            "runnable_tasklets_1024",
+            "runnable_tasklets_4096",
+        ]),
+        ("Channel orchestration", [
+            "channel_rendezvous_32",
+            "channel_rendezvous_256",
+            "channel_rendezvous_1024",
+        ]),
+        ("Fake game study", [
+            "fanout_pipeline_256b",
+            "fanout_pipeline_4096b",
+            "zone_tick_study_small",
+            "zone_tick_study_large",
+        ]),
         ("Catalog and manifest operations", [
             "create_group_directory_yaml",
             "create_group_from_filter_yaml",
@@ -469,26 +552,31 @@ def tested_workloads(rows: list[dict]) -> str:
 
 
 def methodology(bench: dict, rows: list[dict], evidence_dir: Path) -> str:
-    legacy_profiles = sorted({str(row.get("legacy_build_profile")) for row in rows})
-    rust_profiles = sorted({str(row.get("rust_build_profile")) for row in rows})
-    legacy_binaries = sorted({str(row.get("legacy_binary")) for row in rows if row.get("legacy_binary")})
     host = path_value(bench, "/host/cpu_model", "unknown host")
     logical_cpus = path_value(bench, "/host/logical_cpus", "unknown")
+    build_profile = bench.get("build_profile") or path_value(bench, "/host/rust_build/build_profile", "unknown")
+    target_cpu = bench.get("target_cpu_native") if "target_cpu_native" in bench else path_value(bench, "/host/rust_build/target_cpu_native", "unknown")
+    debug_assertions = bench.get("debug_assertions") if "debug_assertions" in bench else path_value(bench, "/host/rust_build/debug_assertions", "unknown")
     return "\n".join(
         [
-            f"<p><strong>Old baseline</strong><br>{h(', '.join(legacy_profiles))}</p>",
-            f"<p><strong>Rust baseline</strong><br>{h(', '.join(rust_profiles))}; target-cpu=native={h(bench.get('target_cpu_native'))}; debug assertions={h(bench.get('debug_assertions'))}</p>",
+            "<p><strong>Old baseline</strong><br>Legacy C++ <code>_scheduler.so</code> native Linux build through the Python scheduler package.</p>",
+            f"<p><strong>Rust baseline</strong><br>Rust scheduler Python bridge; build={h(build_profile)}; target-cpu=native={h(target_cpu)}; debug assertions={h(debug_assertions)}</p>",
             f"<p><strong>Host</strong><br>{h(host)}; {h(logical_cpus)} logical CPUs</p>",
-            f"<p><strong>Evidence</strong><br>{h(evidence_dir / 'bench-tier-local.json')}</p>",
-            f"<p><strong>Old binaries</strong><br>{h('; '.join(legacy_binaries))}</p>",
-            "<p><strong>Scheduler status</strong><br>Scheduler and distributed orchestration claims are excluded until full-orchestration parity is report-ready.</p>",
+            f"<p><strong>Evidence</strong><br>{h(evidence_dir / 'scheduler-comparison.json')}</p>",
+            "<p><strong>Claim boundary</strong><br>Lab scheduler orchestration comparison; real game-environment validation remains the production gate.</p>",
         ]
     )
 
 
 def blocked_report(evidence_dir: Path, bench: dict, rows: list[dict]) -> str:
     readiness = bench.get("optimization_readiness") or {}
-    reason = readiness.get("blocked_reason") or "optimized old-vs-Rust comparison evidence is missing"
+    remaining = bench.get("remaining_before_report_ready") or []
+    reason = (
+        readiness.get("blocked_reason")
+        or bench.get("not_report_ready_reason")
+        or ("; ".join(str(item) for item in remaining) if remaining else None)
+        or "publishable scheduler comparison evidence is missing"
+    )
     generated = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     return Template(
         """<!doctype html>
@@ -496,7 +584,7 @@ def blocked_report(evidence_dir: Path, bench: dict, rows: list[dict]) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Carbon Rust Rewrite: Comparative Report Blocked</title>
+      <title>Carbon Scheduler Rewrite: Comparative Report Blocked</title>
   <style>
     body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #17202a; background: #f4f7f9; line-height: 1.5; }
     main { max-width: 920px; margin: 0 auto; padding: 48px 24px; }
@@ -509,8 +597,8 @@ def blocked_report(evidence_dir: Path, bench: dict, rows: list[dict]) -> str:
 <body>
   <main>
     <section>
-      <h1>Comparative report is blocked</h1>
-      <p>This artifact is intentionally not publishable because the main report requires optimized old-vs-Rust comparison rows.</p>
+      <h1>Scheduler comparison report is blocked</h1>
+      <p>This artifact is intentionally not publishable because the main report requires matched legacy-vs-Rust scheduler comparison rows.</p>
       <p><strong>Reason:</strong> $reason</p>
       <p><strong>Rows found:</strong> $row_count</p>
       <p><strong>Evidence directory:</strong> <code>$evidence_dir</code></p>
@@ -529,10 +617,15 @@ def blocked_report(evidence_dir: Path, bench: dict, rows: list[dict]) -> str:
 
 
 def render(evidence_dir: Path) -> str:
-    bench_path = evidence_dir / "bench-tier-local.json"
-    bench = load_json(bench_path) if bench_path.exists() else {}
-    rows = comparable_rows(bench)
-    if not report_is_publishable(bench, rows):
+    scheduler_path = evidence_dir / "scheduler-comparison.json"
+    scheduler_evidence = load_json(scheduler_path) if scheduler_path.exists() else {}
+    scheduler_rows = scheduler_comparable_rows(scheduler_evidence)
+    if scheduler_report_is_publishable(scheduler_evidence, scheduler_rows):
+        bench = scheduler_evidence
+        rows = scheduler_rows
+    else:
+        bench = scheduler_evidence
+        rows = scheduler_rows
         return blocked_report(evidence_dir, bench, rows)
 
     scheduler_gates = gate_items(evidence_dir)
@@ -544,7 +637,7 @@ def render(evidence_dir: Path) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Carbon Rust Rewrite: Measured Old vs Rust Performance</title>
+  <title>Carbon Scheduler Rewrite: Lab Scheduler Comparison</title>
   <style>
     :root {
       --ink: #17202a;
@@ -721,9 +814,9 @@ def render(evidence_dir: Path) -> str:
 <body>
   <header>
     <div class="hero">
-      <p class="eyebrow">Old vs Rust release comparison</p>
-      <h1>Carbon Rust rewrite: measured resource pipeline comparison.</h1>
-      <p class="lead">This report compares the legacy optimized C++ resources CLI against the Rust release-native implementation on equivalent resource workflows. Scheduler and distributed orchestration claims are intentionally excluded until their full parity gates are report-ready.</p>
+      <p class="eyebrow">Legacy scheduler vs Rust scheduler bridge</p>
+      <h1>Carbon scheduler rewrite: measured lab orchestration comparison.</h1>
+      <p class="lead">This report compares the legacy C++ scheduler extension against the Rust scheduler bridge through the same Python tasklet and channel API. The fake-game workloads are lab evidence for scheduler orchestration; a real game-environment run remains the next production gate.</p>
     </div>
   </header>
   <main>
@@ -737,9 +830,9 @@ def render(evidence_dir: Path) -> str:
       <aside class="panel">
         <h2>What Changed</h2>
         <ul>
-          <li>The tested resource workflows now run through Rust-owned implementation code instead of the legacy C++ CLI path.</li>
-          <li>The external behavior stays equivalent for the tested workflows, so each row is a direct old-vs-Rust comparison.</li>
-          <li>The rewrite gives a cleaner performance path: lower tail latency and lower peak memory on every measured workload in this run.</li>
+          <li>The tested scheduler workloads run through the same public Python API against legacy C++ and the Rust bridge.</li>
+          <li>Each row records semantic checksum parity plus throughput, p99, CPU burn, and peak RSS.</li>
+          <li>The fake-game study stresses tasklet scheduling, channel handoff, fanout, and zone-tick aggregation before the real game gate.</li>
         </ul>
       </aside>
     </section>
@@ -786,7 +879,7 @@ def render(evidence_dir: Path) -> str:
     </section>
 
     <section>
-      <h2>Old vs Rust Results</h2>
+      <h2>Scheduler Lab Results</h2>
       <div class="table-wrap">
         <table>
           <thead>
