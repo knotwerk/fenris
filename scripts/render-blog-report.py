@@ -357,24 +357,84 @@ def architecture_section() -> str:
     )
 
 
-def scheduler_story_section() -> str:
-    items = [
+SCHEDULER_GATES = [
+    ("scheduler-fixtures.json", "Semantic fixtures"),
+    ("legacy-scheduler.json", "Legacy Python/C API baseline"),
+    ("rust-scheduler-python.json", "Rust Python/C API bridge"),
+    ("io-workloads.json", "IO/socket/SSL orchestration"),
+    ("bench-tier-local.json", "Matched scheduler benchmarks"),
+]
+
+
+def optional_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    return load_json(path)
+
+
+def gate_items(evidence_dir: Path) -> list[dict]:
+    items = []
+    for filename, label in SCHEDULER_GATES:
+        evidence = optional_json(evidence_dir / filename)
+        remaining = evidence.get("remaining_before_report_ready") or []
+        not_ready_reason = evidence.get("not_report_ready_reason")
+        blockers = [str(item) for item in remaining[:3]]
+        if not_ready_reason:
+            blockers.insert(0, str(not_ready_reason))
+        items.append(
+            {
+                "filename": filename,
+                "label": label,
+                "status": evidence.get("status", "missing"),
+                "report_ready": evidence.get("report_ready") is True,
+                "coverage": evidence.get("coverage", "missing"),
+                "blockers": blockers,
+            }
+        )
+    return items
+
+
+def scheduler_story_section(items: list[dict]) -> str:
+    open_count = sum(1 for item in items if not item["report_ready"])
+    open_labels = [item["label"] for item in items if not item["report_ready"]]
+    remaining_text = (
+        f"Open gates: {', '.join(open_labels)}."
+        if open_labels
+        else "All scheduler evidence gates are report-ready."
+    )
+    cards = [
         (
             "Evidence status",
-            "This run proves the resource-pipeline comparison, not scheduler orchestration yet. The scheduler line is the next validation thesis: tasklet scheduling should become cheaper, more predictable, and easier to scale across domains.",
+            f"Scheduler and distributed orchestration claims are excluded from this report. {open_count} scheduler-related evidence gates are still not report-ready.",
         ),
         (
-            "Metrics required",
-            "To prove that thesis, the next run needs tasklet handoff latency, channel handoff latency, p99 and p99.9 tail stability, messages per core, memory per tasklet, scheduler overhead above raw transport, and failure recovery.",
+            "What remains",
+            remaining_text,
         ),
         (
-            "Game-environment gate",
-            "Those metrics need to come from a real game environment, because the right optimization path depends on the actual task graph, fan-in and fan-out shape, payload sizes, network topology, cancellation patterns, and failure modes.",
+            "Publish rule",
+            "Scheduler uplift returns to the CEO report only when full-orchestration parity is green; resource pipeline results remain the only current old-vs-Rust performance claim.",
         ),
     ]
     return "\n".join(
-        f"<article><h3>{h(title)}</h3><p>{h(body)}</p></article>" for title, body in items
+        f"<article><h3>{h(title)}</h3><p>{h(body)}</p></article>" for title, body in cards
     )
+
+
+def scheduler_gate_rows(items: list[dict]) -> str:
+    rows = []
+    for item in items:
+        blockers = item["blockers"] or ["no remaining work recorded"]
+        rows.append(
+            "<tr>"
+            f"<td><strong>{h(item['label'])}</strong><small>{h(item['filename'])}</small></td>"
+            f"<td>{h(item['status'])}</td>"
+            f"<td>{'yes' if item['report_ready'] else 'no'}</td>"
+            f"<td>{h(short_text(item['coverage'], 110))}</td>"
+            f"<td>{h('; '.join(blockers))}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows)
 
 
 def tested_workloads(rows: list[dict]) -> str:
@@ -421,7 +481,7 @@ def methodology(bench: dict, rows: list[dict], evidence_dir: Path) -> str:
             f"<p><strong>Host</strong><br>{h(host)}; {h(logical_cpus)} logical CPUs</p>",
             f"<p><strong>Evidence</strong><br>{h(evidence_dir / 'bench-tier-local.json')}</p>",
             f"<p><strong>Old binaries</strong><br>{h('; '.join(legacy_binaries))}</p>",
-            "<p><strong>Next gate</strong><br>Scheduler and distributed-task results should be added after a matched old-vs-Rust run in a game environment.</p>",
+            "<p><strong>Scheduler status</strong><br>Scheduler and distributed orchestration claims are excluded until full-orchestration parity is report-ready.</p>",
         ]
     )
 
@@ -475,6 +535,7 @@ def render(evidence_dir: Path) -> str:
     if not report_is_publishable(bench, rows):
         return blocked_report(evidence_dir, bench, rows)
 
+    scheduler_gates = gate_items(evidence_dir)
     summary = build_summary(rows)
     generated = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     page = Template(
@@ -661,8 +722,8 @@ def render(evidence_dir: Path) -> str:
   <header>
     <div class="hero">
       <p class="eyebrow">Old vs Rust release comparison</p>
-      <h1>Carbon Rust rewrite: measured performance uplift on equivalent resource workloads.</h1>
-      <p class="lead">This report compares the legacy optimized C++ resources CLI against the Rust release-native implementation on the same Linux host. The measured surface is the resource packaging pipeline: catalog, filter, bundle, patch, unpack, and apply operations.</p>
+      <h1>Carbon Rust rewrite: measured resource pipeline comparison.</h1>
+      <p class="lead">This report compares the legacy optimized C++ resources CLI against the Rust release-native implementation on equivalent resource workflows. Scheduler and distributed orchestration claims are intentionally excluded until their full parity gates are report-ready.</p>
     </div>
   </header>
   <main>
@@ -691,9 +752,29 @@ def render(evidence_dir: Path) -> str:
     </section>
 
     <section>
-      <h2>Scheduler Orchestration</h2>
+      <h2>Scheduler Validation Gate</h2>
       <div class="arch-grid">
         $scheduler_story
+      </div>
+    </section>
+
+    <section>
+      <h2>Scheduler Evidence Status</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Gate</th>
+              <th>Status</th>
+              <th>Report ready</th>
+              <th>Coverage</th>
+              <th>Remaining blocker</th>
+            </tr>
+          </thead>
+          <tbody>
+            $scheduler_gate_rows
+          </tbody>
+        </table>
       </div>
     </section>
 
@@ -740,7 +821,8 @@ def render(evidence_dir: Path) -> str:
     return page.safe_substitute(
         executive_cards=executive_cards(summary),
         architecture=architecture_section(),
-        scheduler_story=scheduler_story_section(),
+        scheduler_story=scheduler_story_section(scheduler_gates),
+        scheduler_gate_rows=scheduler_gate_rows(scheduler_gates),
         tested_workloads=tested_workloads(rows),
         result_rows=result_rows(rows),
         methodology=methodology(bench, rows, evidence_dir),

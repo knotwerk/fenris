@@ -304,6 +304,25 @@ fn scheduler_fixtures(fixture_dir: &Path) -> Result<()> {
     let evidence_path = evidence_path("scheduler-fixtures.json");
     let mut evidence = serde_json::to_value(&report)?;
     let linked_local_evidence = scheduler_fixture_linked_evidence();
+    let legacy_scheduler_report_ready = read_evidence("legacy-scheduler.json")
+        .ok()
+        .is_some_and(|value| report_ready_blockers("legacy-scheduler.json", &value).is_empty());
+    let io_workloads_report_ready = read_evidence("io-workloads.json")
+        .ok()
+        .is_some_and(|value| report_ready_blockers("io-workloads.json", &value).is_empty());
+    let mut remaining_before_report_ready = vec![String::from(
+        "promote remaining lifecycle, callback, switch-trap, nested-timeout, teardown, and cleanup fixture coverage beyond the current symbolic scheduler core slice",
+    )];
+    if !legacy_scheduler_report_ready {
+        remaining_before_report_ready.push(String::from(
+            "run the supported-platform legacy scheduler baseline gate before final scheduler parity claims",
+        ));
+    }
+    if !io_workloads_report_ready {
+        remaining_before_report_ready.push(String::from(
+            "run normalized legacy carbonio/_socket/_ssl semantic trace comparison before final IO scheduler parity claims",
+        ));
+    }
     if let Some(object) = evidence.as_object_mut() {
         object.insert(
             String::from("linked_local_evidence"),
@@ -328,11 +347,7 @@ fn scheduler_fixtures(fixture_dir: &Path) -> Result<()> {
         );
         object.insert(
             String::from("remaining_before_report_ready"),
-            json!([
-                "promote remaining lifecycle, callback, switch-trap, nested-timeout, teardown, and cleanup fixture coverage beyond the current symbolic scheduler core slice",
-                "run the supported-platform legacy scheduler baseline gate before final scheduler parity claims",
-                "run normalized legacy carbonio/_socket/_ssl semantic trace comparison before final IO scheduler parity claims"
-            ]),
+            json!(remaining_before_report_ready),
         );
     }
     write_json(&evidence_path, &evidence)?;
@@ -955,6 +970,8 @@ fn legacy_scheduler_native_linux() -> Result<()> {
     let mut configure_success = None;
     let mut build_success = None;
     let mut python_unittest_success = None;
+    let mut ctest_success = None;
+    let mut ctest_summary = None;
     let mut python_unittest_summary = Value::Null;
     let mut greenlet_probe = Value::Null;
 
@@ -997,6 +1014,19 @@ fn legacy_scheduler_native_linux() -> Result<()> {
         }
     } else {
         None
+    };
+    let gtest_prefix = legacy_scheduler_gtest_prefix(&repo_root);
+    let gtest_probe = if let Some(prefix) = &gtest_prefix {
+        json!({
+            "status": "found",
+            "prefix": prefix.display().to_string(),
+            "config": prefix.join("share/gtest/GTestConfig.cmake").display().to_string()
+        })
+    } else {
+        json!({
+            "status": "missing",
+            "searched": "CARBON_GTEST_CMAKE_PREFIX_PATH, resources vcpkg build prefixes, scheduler vcpkg installed prefix, /usr, /usr/local"
+        })
     };
 
     if blockers.is_empty() {
@@ -1056,15 +1086,21 @@ fn legacy_scheduler_native_linux() -> Result<()> {
 
         let mut scheduler_configure_args =
             cmake_configure_args(&scheduler_source_dir, &scheduler_build_dir);
+        let mut cmake_prefix_paths = vec![
+            core_prefix.display().to_string(),
+            greenlet_config_root.display().to_string(),
+        ];
+        if let Some(prefix) = &gtest_prefix {
+            cmake_prefix_paths.push(prefix.display().to_string());
+        }
         scheduler_configure_args.extend([
             String::from("-DCMAKE_BUILD_TYPE=Release"),
-            String::from("-DBUILD_TESTING=OFF"),
-            String::from("-DBUILD_DOCUMENTATION=OFF"),
             format!(
-                "-DCMAKE_PREFIX_PATH={};{}",
-                core_prefix.display(),
-                greenlet_config_root.display()
+                "-DBUILD_TESTING={}",
+                if gtest_prefix.is_some() { "ON" } else { "OFF" }
             ),
+            String::from("-DBUILD_DOCUMENTATION=OFF"),
+            format!("-DCMAKE_PREFIX_PATH={}", cmake_prefix_paths.join(";")),
             format!(
                 "-DCMAKE_INSTALL_RPATH={};{}",
                 core_prefix.join("lib").display(),
@@ -1150,6 +1186,40 @@ fn legacy_scheduler_native_linux() -> Result<()> {
                     > 0,
         );
         steps.push(python_test.evidence);
+
+        let capi_ctest = if scheduler_build.success && gtest_prefix.is_some() {
+            let ld_library_path = env_join_paths([
+                core_prefix.join("lib").as_path(),
+                greenlet_info.python_libdir.as_path(),
+            ])?;
+            let envs = vec![(String::from("LD_LIBRARY_PATH"), ld_library_path)];
+            let args = vec![
+                String::from("--test-dir"),
+                scheduler_build_dir.display().to_string(),
+                String::from("--output-on-failure"),
+                String::from("-R"),
+                String::from("Capi"),
+            ];
+            run_probe_step(
+                "native-linux-scheduler-capi-ctest",
+                Path::new("ctest"),
+                &args,
+                None,
+                &envs,
+            )
+        } else {
+            skipped_probe_step("native-linux-scheduler-capi-ctest")
+        };
+        ctest_success = if gtest_prefix.is_some() {
+            Some(capi_ctest.success)
+        } else {
+            None
+        };
+        ctest_summary = parse_ctest_summary_from_text(&format!(
+            "{}\n{}",
+            capi_ctest.stdout, capi_ctest.stderr
+        ));
+        steps.push(capi_ctest.evidence);
     }
 
     if configure_success == Some(false) {
@@ -1173,21 +1243,47 @@ fn legacy_scheduler_native_linux() -> Result<()> {
             "fix the failing scheduler Python parity tests before using this host baseline",
         ));
     }
-    blockers.push(readiness_blocker(
-        "legacy_scheduler_native_linux_capi_ctest_not_run",
-        "native Linux path runs the Python unittest baseline, but not the C API CTest baseline",
-        "install or provide a GTest package for the direct scheduler CMake build, then add C API CTest coverage to the native Linux path",
-    ));
+    if gtest_prefix.is_none() {
+        blockers.push(readiness_blocker(
+            "legacy_scheduler_native_linux_gtest_missing",
+            "native Linux C API CTest was not configured because no GTest CMake package was found",
+            "set CARBON_GTEST_CMAKE_PREFIX_PATH or provide a vcpkg-installed GTest package before running the native Linux scheduler gate",
+        ));
+    }
+    if ctest_success == Some(false) {
+        blockers.push(readiness_blocker(
+            "legacy_scheduler_native_linux_capi_ctest_failed",
+            "native Linux legacy scheduler C API CTest failed",
+            "fix the failing SchedulerCapiTest cases before using this host baseline",
+        ));
+    }
+    if ctest_success == Some(true) {
+        match ctest_summary {
+            Some(summary) if summary.total > 0 && summary.failed == 0 => {}
+            Some(_) => blockers.push(readiness_blocker(
+                "legacy_scheduler_native_linux_capi_ctest_no_passing_baseline",
+                "native Linux C API CTest did not report a non-empty passing baseline",
+                "ensure ctest discovers and passes the SchedulerCapiTest C API suite",
+            )),
+            None => blockers.push(readiness_blocker(
+                "legacy_scheduler_native_linux_capi_ctest_summary_missing",
+                "native Linux C API CTest output did not include a parseable CTest summary",
+                "record a CTest run with the standard summary line before promoting report_ready",
+            )),
+        }
+    }
 
     let requested_action_passed = configure_success == Some(true)
         && build_success == Some(true)
-        && python_unittest_success == Some(true);
+        && python_unittest_success == Some(true)
+        && ctest_success == Some(true)
+        && ctest_summary.is_some_and(|summary| summary.total > 0 && summary.failed == 0);
     let status = if requested_action_passed {
         "pass"
     } else {
         "fail"
     };
-    let report_ready = false;
+    let report_ready = requested_action_passed && blockers.is_empty();
     let failures = blocker_codes(&blockers);
     let remaining_before_report_ready = blocker_remediations(&blockers);
     let python_ran = python_unittest_summary
@@ -1205,8 +1301,8 @@ fn legacy_scheduler_native_linux() -> Result<()> {
         "implementation": "legacy_cpp_python_extension",
         "status": status,
         "report_ready": report_ready,
-        "coverage": "legacy_scheduler_native_linux_python_unittest",
-        "command": "build carbonengine/core and carbonengine/scheduler directly on Linux, then run the unchanged legacy scheduler Python unittest suite",
+        "coverage": if ctest_success == Some(true) { "legacy_scheduler_native_linux_python_unittest_capi_ctest" } else { "legacy_scheduler_native_linux_python_unittest" },
+        "command": "build carbonengine/core and carbonengine/scheduler directly on Linux, run the unchanged legacy scheduler Python unittest suite, then run SchedulerCapiTest C API CTest when GTest is available",
         "mode": "native-linux",
         "duration_ms": started.elapsed().as_millis() as u64,
         "host": {
@@ -1223,6 +1319,7 @@ fn legacy_scheduler_native_linux() -> Result<()> {
         "core_build_directory": core_build_dir.display().to_string(),
         "core_install_prefix": core_prefix.display().to_string(),
         "greenlet_probe": greenlet_probe,
+        "gtest_probe": gtest_probe,
         "vcpkg_executable": Value::Null,
         "toolchain_file": Value::Null,
         "supported_triplet": "native-linux-host",
@@ -1234,18 +1331,18 @@ fn legacy_scheduler_native_linux() -> Result<()> {
             "vcpkg_available": Value::Null,
             "configure": probe_status(configure_success),
             "build": probe_status(build_success),
-            "ctest": "not_run",
-            "tests_passed": Value::Null,
-            "tests_failed": Value::Null,
-            "tests_total": Value::Null,
+            "ctest": probe_status(ctest_success),
+            "tests_passed": ctest_summary.map(|summary| summary.passed),
+            "tests_failed": ctest_summary.map(|summary| summary.failed),
+            "tests_total": ctest_summary.map(|summary| summary.total),
             "python_unittest": probe_status(python_unittest_success),
             "python_tests_passed": python_ran.saturating_sub(python_skipped),
             "python_tests_skipped": python_skipped,
             "python_tests_total": python_ran,
-            "baseline_complete": false
+            "baseline_complete": requested_action_passed
         },
         "python_unittest_summary": python_unittest_summary,
-        "local_probe_diagnosis": "native Linux source build and Python unittest baseline are available on this host; C API CTest remains blocked until GTest is available for the direct scheduler CMake build.",
+        "local_probe_diagnosis": if report_ready { Value::Null } else { json!("native Linux source build and Python unittest baseline are available on this host, but the full scheduler baseline is not report-ready until SchedulerCapiTest C API CTest discovers a non-empty passing C API suite.") },
         "steps": steps,
         "blockers": blockers,
         "failures": failures,
@@ -1254,7 +1351,7 @@ fn legacy_scheduler_native_linux() -> Result<()> {
     let evidence_path = evidence_path("legacy-scheduler.json");
     write_json(&evidence_path, &evidence)?;
     println!(
-        "legacy-scheduler: {status} (native Linux source build plus Python unittest baseline; report_ready={report_ready}); evidence {}",
+        "legacy-scheduler: {status} (native Linux source build plus Python/C API baseline; report_ready={report_ready}); evidence {}",
         evidence_path.display()
     );
 
@@ -1600,7 +1697,33 @@ set_target_properties(Greenlet PROPERTIES
         info.version,
         info.extension_path.display(),
         info.python_module_dir.display(),
-    )
+)
+}
+
+fn legacy_scheduler_gtest_prefix(repo_root: &Path) -> Option<PathBuf> {
+    if let Some(path) = env::var_os("CARBON_GTEST_CMAKE_PREFIX_PATH") {
+        for candidate in env::split_paths(&path) {
+            if candidate.join("share/gtest/GTestConfig.cmake").exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    [
+        repo_root
+            .join("carbonengine/resources/.cmake-build-linux-vcpkg-release/vcpkg_installed/x64-linux"),
+        repo_root
+            .join("carbonengine/resources/.cmake-build-linux-vcpkg-release-devfeatures/vcpkg_installed/x64-linux"),
+        repo_root
+            .join("carbonengine/resources/.cmake-build-linux-vcpkg-probe/vcpkg_installed/x64-linux"),
+        repo_root
+            .join("carbonengine/resources/vendor/github.com/microsoft/vcpkg/packages/gtest_x64-linux"),
+        repo_root.join("carbonengine/scheduler/vendor/github.com/microsoft/vcpkg/installed/x64-linux"),
+        PathBuf::from("/usr"),
+        PathBuf::from("/usr/local"),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.join("share/gtest/GTestConfig.cmake").exists())
 }
 
 fn cmake_configure_args(source_dir: &Path, build_dir: &Path) -> Vec<String> {
@@ -14165,6 +14288,7 @@ fn progress_report() -> Result<()> {
         "legacy-resources.json",
         "rust-resources.json",
         "bench-tier-local.json",
+        "scalability-matrix.json",
     ];
     let evidence = evidence_files
         .iter()
@@ -17490,8 +17614,73 @@ where
                 );
             }
         }
+
+        if file == "scalability-matrix.json" {
+            if let Some(rows) = value.get("rows").and_then(Value::as_array) {
+                entries.extend(rows.iter().cloned().map(|entry| {
+                    let normalized = normalize_scalability_performance_entry(entry);
+                    performance_entry_with_metadata(normalized, file, "pressure", value)
+                }));
+            }
+        }
     }
     entries
+}
+
+fn normalize_scalability_performance_entry(mut entry: Value) -> Value {
+    if let Some(object) = entry.as_object_mut() {
+        if !object.contains_key("rust_sample_stats_us") {
+            if let Some(latency) = object.get("latency_us_extended").cloned() {
+                object.insert(String::from("rust_sample_stats_us"), latency);
+            }
+        }
+        if !object.contains_key("rust_process_stats") {
+            if let Some(process_stats) = object.get("process_stats").cloned() {
+                object.insert(String::from("rust_process_stats"), process_stats);
+            }
+        }
+        if !object.contains_key("rust_duration_us") {
+            if let Some(duration_us) = object.get("duration_us").cloned() {
+                object.insert(String::from("rust_duration_us"), duration_us);
+            }
+        }
+        for (source, target) in [
+            (
+                "throughput_operations_per_sec",
+                "rust_throughput_operations_per_sec",
+            ),
+            (
+                "throughput_events_per_sec",
+                "rust_throughput_events_per_sec",
+            ),
+            (
+                "throughput_network_bytes_per_sec",
+                "rust_throughput_network_bytes_per_sec",
+            ),
+            (
+                "throughput_data_bytes_per_sec",
+                "rust_throughput_data_bytes_per_sec",
+            ),
+            ("throughput_rows_per_sec", "rust_throughput_rows_per_sec"),
+        ] {
+            if !object.contains_key(target) {
+                if let Some(value) = object.get(source).cloned() {
+                    object.insert(String::from(target), value);
+                }
+            }
+        }
+        if !object.contains_key("not_comparable_reason") {
+            if let Some(claim_scope) = object.get("claim_scope").cloned() {
+                object.insert(String::from("not_comparable_reason"), claim_scope);
+            }
+        }
+        if !object.contains_key("claim") {
+            if let Some(claim) = object.get("claim_eligibility").cloned() {
+                object.insert(String::from("claim"), claim);
+            }
+        }
+    }
+    entry
 }
 
 fn performance_entry_with_metadata(
@@ -17598,6 +17787,13 @@ fn performance_comparability_summary(entries: &[Value]) -> String {
                 == Some("rust_scheduler_process_not_legacy_comparable")
         })
         .count();
+    let scheduler_pressure_only = entries
+        .iter()
+        .filter(|entry| {
+            entry.get("comparability").and_then(Value::as_str)
+                == Some("rust_only_generated_pressure_not_legacy_comparable")
+        })
+        .count();
     let io_bridge_only = entries
         .iter()
         .filter(|entry| {
@@ -17623,7 +17819,7 @@ fn performance_comparability_summary(entries: &[Value]) -> String {
         })
         .count();
     format!(
-        "{comparable} comparable legacy-vs-Rust rows; {non_comparable} non-comparable rows shown with reasons ({scheduler_resource_only} scheduler resource-only, {io_bridge_only} IO baseline-vs-bridge, {rust_only} Rust-only); {speedup_claims} optimized-baseline speedup claim rows."
+        "{comparable} comparable legacy-vs-Rust rows; {non_comparable} non-comparable rows shown with reasons ({scheduler_resource_only} scheduler resource-only, {scheduler_pressure_only} scheduler pressure, {io_bridge_only} IO baseline-vs-bridge, {rust_only} Rust-only); {speedup_claims} optimized-baseline speedup claim rows."
     )
 }
 
@@ -17810,6 +18006,9 @@ fn comparability_label(value: &str) -> &'static str {
         "rust_scheduler_process_not_legacy_comparable" => {
             "Rust scheduler process resource evidence, no matched legacy sample"
         }
+        "rust_only_generated_pressure_not_legacy_comparable" => {
+            "Rust scheduler pressure evidence, no matched legacy sample"
+        }
         _ => "unknown comparability",
     }
 }
@@ -17823,6 +18022,7 @@ fn comparison_throughput(comparison: &Value, prefix: &str) -> String {
 fn comparison_throughput_value(comparison: &Value, prefix: &str) -> Option<(String, f64)> {
     let preferred_suffixes = [
         "requests_per_sec",
+        "operations_per_sec",
         "directories_per_sec",
         "filter_mappings_per_sec",
         "groups_per_sec",
@@ -17833,6 +18033,9 @@ fn comparison_throughput_value(comparison: &Value, prefix: &str) -> Option<(Stri
         "bundles_unpacked_per_sec",
         "patches_applied_per_sec",
         "events_per_sec",
+        "network_bytes_per_sec",
+        "data_bytes_per_sec",
+        "rows_per_sec",
         "paths_per_sec",
         "bytes_per_sec",
     ];
