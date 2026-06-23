@@ -61,10 +61,12 @@ callable execution, and Python scheduler switch-trap entrypoints plus trapped
 operation guards now use CoreScheduler per-run-queue state. Python runtime sync
 no longer writes the core scheduled flag; Python-visible tasklet
 alive/blocked/scheduled/paused/block_trap/times_switched_to properties and the
-public tasklet insert/run/switch invalid-state guards, current-tasklet
-block-trap guard used by channel operations, and C API times-switched/block-trap
-getters now read CoreScheduler snapshots, including the legacy transient
-current-tasklet scheduled flag during `scheduler.schedule()`.
+public tasklet call/setup/insert/run/switch invalid-state guards,
+current-tasklet block-trap guard used by channel operations, and C API
+times-switched/block-trap getters now read CoreScheduler snapshots, including
+the legacy transient current-tasklet scheduled flag during
+`scheduler.schedule()`. The public insert path no longer resyncs stale
+bridge-local lifecycle fields when the core already owns the scheduled state.
 Python-visible channel preference/closing/closed properties also read
 CoreScheduler snapshots. Current-thread runnable PyObject registry storage is
 now thread-local compatibility state while CoreScheduler remains the runnable

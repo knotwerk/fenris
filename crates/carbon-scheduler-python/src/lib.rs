@@ -1037,8 +1037,8 @@ impl Tasklet {
                 slf.core_id,
                 tasklet.clone_ref(py),
             )?;
+            slf.sync_core_state();
         }
-        slf.sync_core_state();
         Ok(tasklet)
     }
 
@@ -1181,7 +1181,8 @@ impl Tasklet {
         args: &Bound<'_, PyTuple>,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<PyObject> {
-        if slf.scheduled {
+        let snapshot = slf.core_snapshot()?;
+        if snapshot.scheduled {
             return Err(PyRuntimeError::new_err("tasklet is already scheduled"));
         }
         if slf.callable.is_none() {
@@ -4423,7 +4424,8 @@ fn enqueue_tasklet_object(
                 "Failed to setup tasklet: Cannot setup tasklet from another thread",
             ));
         }
-        if tasklet.scheduled {
+        let snapshot = tasklet.core_snapshot()?;
+        if snapshot.scheduled {
             return Err(PyRuntimeError::new_err("tasklet is already scheduled"));
         }
         if tasklet.callable.is_none() {
@@ -6732,11 +6734,21 @@ assert tasklet.block_trap is True
 before_insert = scheduler.getruncount()
 tasklet.insert()
 assert scheduler.getruncount() == before_insert
+try:
+    tasklet()
+    raise AssertionError("core-scheduled tasklet call unexpectedly succeeded")
+except RuntimeError as exc:
+    assert "already scheduled" in str(exc)
+try:
+    tasklet.setup()
+    raise AssertionError("core-scheduled tasklet setup unexpectedly succeeded")
+except RuntimeError as exc:
+    assert "already scheduled" in str(exc)
 "#,
                 Some(&locals),
                 Some(&locals),
             )
-            .expect("block_trap getter and insert guard should read core-authoritative state");
+            .expect("block_trap getter and scheduling guards should read core-authoritative state");
 
             py.run_bound(
                 r#"
