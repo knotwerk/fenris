@@ -265,7 +265,7 @@ Required before the baseline commit:
 - `cargo run -p xtask -- scheduler-fixtures` passes.
 - `cargo run -p xtask -- rust-scheduler-python` passes.
 - `scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set
-  pressure --tier quick --samples 10` passes with zero rejected semantic
+  all --tier quick --samples 10` passes with zero rejected semantic
   mismatches.
 - `cargo run -p xtask -- io-workloads` passes or its unsupported legacy trace
   blocker is explicitly recorded.

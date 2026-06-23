@@ -51,11 +51,11 @@ WORKLOAD_LABELS = {
         "Payload-heavy synthetic fanout across worker tasklets.",
     ),
     "zone_tick_study_small": (
-        "Fake game zone tick",
+        "Synthetic zone tick",
         "Synthetic zones, entity updates, network-like messages, and aggregation.",
     ),
     "zone_tick_study_large": (
-        "Fake game zone tick, large",
+        "Synthetic zone tick, large",
         "Larger synthetic game loop for tail and resource pressure.",
     ),
     "create_group_directory_yaml": (
@@ -257,7 +257,17 @@ def fmt_rate(value: object, unit: str) -> str:
         if amount >= 1024:
             return f"{amount / 1024:.1f} KB/s"
         return f"{amount:.0f} B/s"
-    return f"{fmt_count(amount)}/s"
+    labels = {
+        "directories": "dirs/s",
+        "events": "events/s",
+        "messages": "msg/s",
+        "operations": "ops/s",
+        "requests": "req/s",
+        "resources": "resources/s",
+        "rows": "rows/s",
+    }
+    suffix = labels.get(unit, f"{unit}/s")
+    return f"{fmt_count(amount)} {suffix}"
 
 
 def fmt_cv(value: object) -> str:
@@ -1123,6 +1133,36 @@ def architecture_takeaway_cards() -> str:
     )
 
 
+def scope_stat(label: str, value: str) -> str:
+    return (
+        '<div class="scope-stat">'
+        f"<span>{h(label)}</span>"
+        f"<strong>{h(value)}</strong>"
+        "</div>"
+    )
+
+
+def scope_card(
+    title: str,
+    kind: str,
+    boundary: str,
+    stats: list[tuple[str, str]],
+    note: str,
+) -> str:
+    stats_html = "\n".join(scope_stat(label, value) for label, value in stats)
+    return f"""<article class="scope-card">
+  <div class="scope-head">
+    <h3>{h(title)}</h3>
+    <span class="scope-kind">{h(kind)}</span>
+  </div>
+  <p class="scope-boundary">{h(boundary)}</p>
+  <div class="scope-metrics">
+    {stats_html}
+  </div>
+  <p class="scope-note">{h(note)}</p>
+</article>"""
+
+
 def performance_breakdown_cards(
     scheduler_summary: dict,
     resource_summary: dict,
@@ -1209,67 +1249,76 @@ def performance_breakdown_cards(
         ),
         default=None,
     )
+    native_format_rows = [
+        row for row in data_rows_data if row.get("serialization_format") is not None
+    ]
     return "\n".join(
         [
-            metric_card(
-                "Scheduler throughput",
-                fmt_directional_ratio(scheduler_summary["median_speedup"]),
-                f"legacy C++ vs Rust bridge; {scheduler_summary['rows']} comparable rows",
+            scope_card(
+                "Scheduler same-API comparison",
+                "old vs Rust",
+                "Legacy C++ scheduler extension and Rust scheduler bridge run the same Python tasklet/channel workloads. This is the primary scheduler comparison.",
+                [
+                    ("Rows", fmt_int(scheduler_summary["rows"])),
+                    ("Throughput", fmt_directional_ratio(scheduler_summary["median_speedup"])),
+                    ("p99 tail", fmt_signed_percent(scheduler_summary["median_p99_reduction"])),
+                    ("CPU burn", fmt_signed_percent(scheduler_summary["median_cpu_reduction"])),
+                    ("Peak memory", fmt_signed_percent(scheduler_summary["median_rss_reduction"])),
+                    ("Equal/faster rows", f"{fmt_int(scheduler_summary['equal_or_faster'])}/{fmt_int(scheduler_summary['rows'])}"),
+                ],
+                "Current read: parity is measurable, but the Rust bridge is slower on these lab rows.",
             ),
-            metric_card(
-                "Scheduler p99",
-                fmt_signed_percent(scheduler_summary["median_p99_reduction"]),
-                f"median tail change; lower in {scheduler_summary['p99_better']}/{scheduler_summary['rows']}",
+            scope_card(
+                "Scheduler pressure shape",
+                "Rust-only",
+                "Core scheduler pressure rows increase tasklet and channel-pair load to show scaling shape, tail behavior, CPU, memory, and stability without claiming old-vs-Rust speedup.",
+                [
+                    ("Rows", fmt_int(pressure_rows_count)),
+                    ("Peak throughput", fmt_rate(peak_operations_per_sec, "operations")),
+                    ("Worst p99", fmt_us(worst_latency_p99_us)),
+                    ("Worst p99.9", fmt_us(worst_latency_p99_9_us)),
+                    ("Stable rows", f"{fmt_int(stable_rows)}/{fmt_int(pressure_rows_count)}"),
+                    ("Peak RSS p95", fmt_kb(highest_peak_rss_kb_p95)),
+                ],
+                "Use this to reason about scheduler scale pressure before a real game-environment run is available.",
             ),
-            metric_card(
-                "Scheduler resources",
-                f"{fmt_signed_percent(scheduler_summary['median_cpu_reduction'])} CPU",
-                f"peak memory {fmt_signed_percent(scheduler_summary['median_rss_reduction'])}",
+            scope_card(
+                "Network and IO pressure",
+                "local loopback",
+                "Socket and TLS loopback rows measure request rate, data rate, tail latency, CPU, memory, and stability. They are not legacy Carbon IO parity rows.",
+                [
+                    ("Rows", fmt_int(len(io_capacity_rows_data))),
+                    ("Peak network", fmt_rate(peak_network_bytes_per_sec, "bytes")),
+                    ("Peak requests", fmt_rate(peak_requests_per_sec, "requests")),
+                    ("Worst p99", fmt_us(worst_io_p99_us)),
+                ],
+                "Use this as local transport capacity context while legacy Carbon IO traces remain a separate gate.",
             ),
-            metric_card(
-                "Pressure shape",
-                fmt_rate(peak_operations_per_sec, "operations"),
-                f"{fmt_int(stable_rows)}/{fmt_int(pressure_rows_count)} scheduler rows stable at CV <= 10%",
+            scope_card(
+                "Resources same-format comparison",
+                "separate repo",
+                "Legacy resources CLI and Rust release-native resource commands run the same YAML/CSV and local bundle or patch operations. These rows support the resources port, not scheduler speed.",
+                [
+                    ("Rows", fmt_int(resource_summary["rows"])),
+                    ("Throughput", fmt_directional_ratio(resource_summary["median_speedup"])),
+                    ("p99 tail", fmt_signed_percent(resource_summary["median_p99_reduction"])),
+                    ("CPU burn", fmt_signed_percent(resource_summary["median_cpu_reduction"])),
+                    ("Peak memory", fmt_signed_percent(resource_summary["median_rss_reduction"])),
+                    ("Equal/faster rows", f"{fmt_int(resource_summary['equal_or_faster'])}/{fmt_int(resource_summary['rows'])}"),
+                ],
+                "This is the current positive performance story, but it is clearly outside the scheduler claim.",
             ),
-            metric_card(
-                "Worst scheduler p99",
-                fmt_us(worst_latency_p99_us),
-                f"Supplemental core-only pressure matrix; p99.9 {fmt_us(worst_latency_p99_9_us)}",
-            ),
-            metric_card(
-                "Pressure memory",
-                fmt_kb(highest_peak_rss_kb_p95),
-                f"p95 peak RSS across {fmt_int(pressure_rows_count)} scheduler pressure rows",
-            ),
-            metric_card(
-                "Network capacity",
-                fmt_rate(peak_network_bytes_per_sec, "bytes"),
-                f"peak local loopback transfer; {fmt_rate(peak_requests_per_sec, 'requests')} peak",
-            ),
-            metric_card(
-                "Network tail",
-                fmt_us(worst_io_p99_us),
-                f"worst p99 across {fmt_int(len(io_capacity_rows_data))} socket/TLS pressure rows",
-            ),
-            metric_card(
-                "Data throughput",
-                fmt_rate(peak_data_bytes_per_sec, "bytes"),
-                f"Rust resource/data pressure rows; {fmt_rate(peak_rows_per_sec, 'rows')} peak rows/sec",
-            ),
-            metric_card(
-                "Resources throughput",
-                fmt_directional_ratio(resource_summary["median_speedup"]),
-                f"separate resource CLI comparison; {resource_summary['rows']} rows",
-            ),
-            metric_card(
-                "Resources cost",
-                f"{fmt_signed_percent(resource_summary['median_cpu_reduction'])} CPU",
-                f"peak memory {fmt_signed_percent(resource_summary['median_rss_reduction'])}",
-            ),
-            metric_card(
-                "Data/resource rows",
-                fmt_int(len(data_rows_data)),
-                "checksum, compression, YAML/JSON catalog, Arrow IPC, and Parquet/Zstd pressure",
+            scope_card(
+                "Native resource/data formats",
+                "upgraded path",
+                "Rust-only pressure rows cover checksum/compression, YAML/JSON catalog round-trips, and native Arrow IPC or Parquet/Zstd catalog round-trips.",
+                [
+                    ("Rows", fmt_int(len(data_rows_data))),
+                    ("Native rows", fmt_int(len(native_format_rows))),
+                    ("Peak data", fmt_rate(peak_data_bytes_per_sec, "bytes")),
+                    ("Peak rows", fmt_rate(peak_rows_per_sec, "rows")),
+                ],
+                "These show where Arrow IPC and Parquet help resource/data interchange; they are not scheduler dispatch wins.",
             ),
         ]
     )
@@ -1626,7 +1675,7 @@ def tested_workloads(rows: list[dict]) -> str:
             "channel_rendezvous_256",
             "channel_rendezvous_1024",
         ]),
-        ("Fake game study", [
+        ("Synthetic game-loop study", [
             "fanout_pipeline_256b",
             "fanout_pipeline_4096b",
             "zone_tick_study_small",
@@ -1878,11 +1927,75 @@ def render(evidence_dir: Path) -> str:
       grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
       gap: 12px;
     }
+    .scope-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+    }
     .metric, .panel, .arch-grid article, .tested-grid article, .story-grid article, .callout {
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: 0 1px 2px rgba(23, 32, 42, 0.04);
+    }
+    .scope-card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(23, 32, 42, 0.04);
+      padding: 16px;
+    }
+    .scope-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+    .scope-head h3 { margin-bottom: 0; }
+    .scope-kind {
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 8px;
+      color: var(--muted);
+      font-size: 0.70rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+    }
+    .scope-boundary {
+      min-height: 3.9em;
+      color: var(--muted);
+      margin: 0 0 12px;
+    }
+    .scope-metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+    .scope-stat { min-width: 0; }
+    .scope-stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.70rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .scope-stat strong {
+      display: block;
+      margin-top: 3px;
+      font-size: 1rem;
+      overflow-wrap: anywhere;
+    }
+    .scope-note {
+      color: var(--muted);
+      font-size: 0.86rem;
+      margin: 12px 0 0;
     }
     .metric { padding: 15px; }
     .metric, .panel, .arch-grid article, .tested-grid article, .story-grid article, .callout, .table-wrap {
@@ -2096,6 +2209,7 @@ def render(evidence_dir: Path) -> str:
       .hero .metric-grid { grid-template-columns: 1fr 1fr; }
       .metric-grid { grid-template-columns: 1fr 1fr; }
       .workload-grid { grid-template-columns: 1fr; }
+      .scope-grid { grid-template-columns: 1fr; }
       .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       table { min-width: 760px; font-size: 0.84rem; }
       th, td { padding: 8px; }
@@ -2106,6 +2220,7 @@ def render(evidence_dir: Path) -> str:
       .lead { font-size: 1rem; }
       .hero .metric-grid,
       .metric-grid { grid-template-columns: 1fr; }
+      .scope-metrics { grid-template-columns: 1fr; }
       .workload-head { display: block; }
       .status-pill { display: inline-flex; margin-top: 8px; }
       .stat-grid { grid-template-columns: 1fr; }
@@ -2197,7 +2312,7 @@ def render(evidence_dir: Path) -> str:
         </div>
         <span class="tag">Scope split</span>
       </div>
-      <div class="metric-grid">
+      <div class="scope-grid">
         $performance_breakdown
       </div>
     </section>

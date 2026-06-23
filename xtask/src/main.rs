@@ -3620,7 +3620,7 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
         blockers.push(readiness_blocker(
             "scheduler_comparison_too_few_samples",
             format!(
-                "scheduler comparison used {} samples; publishable pressure evidence requires at least 10",
+                "scheduler comparison used {} samples; publishable scheduler evidence requires at least 10",
                 config.samples
             ),
             "rerun bench-scheduler-comparison with --samples 10 or higher",
@@ -3632,7 +3632,7 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
             format!(
                 "scheduler comparison build_profile={build_profile}, target_cpu_native={target_cpu_native}, debug_assertions={debug_assertions}"
             ),
-            "rerun with scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set pressure --tier quick --samples 10",
+            "rerun with scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set all --tier quick --samples 10",
         ));
     }
 
@@ -3785,7 +3785,7 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
             config.tier.as_str(),
             config.samples
         ),
-        "recommended_blog_command": "scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set pressure --tier quick --samples 10",
+        "recommended_blog_command": "scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set all --tier quick --samples 10",
         "duration_ms": started.elapsed().as_millis() as u64,
         "host": {
             "os": env::consts::OS,
@@ -3950,7 +3950,7 @@ fn scheduler_comparison_specs(
         ),
         scheduler_comparison_spec(
             "zone_tick_study_small",
-            "Fake game zone tick",
+            "Synthetic zone tick",
             "Synthetic game loop with zones, entity updates, network-like messages, and aggregation.",
             json!({"workload": "zone_tick_study", "zones": 4, "entities_per_zone": 256, "ticks": 20, "message_stride": 32}),
         ),
@@ -3978,7 +3978,7 @@ fn scheduler_comparison_specs(
             ),
             scheduler_comparison_spec(
                 "zone_tick_study_large",
-                "Fake game zone tick, large",
+                "Synthetic zone tick, large",
                 "Larger synthetic game loop for tail and resource pressure.",
                 json!({"workload": "zone_tick_study", "zones": 16, "entities_per_zone": 1024, "ticks": 40, "message_stride": 64}),
             ),
@@ -4669,6 +4669,19 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             )
         })
         .count();
+    let mut remaining_before_report_ready = vec![
+        String::from("add comparable legacy scheduler process pressure rows before claiming scheduler speedups"),
+        String::from("add captured legacy Carbon IO rows before claiming Carbon IO speedups"),
+        String::from("decide CI thresholds separately from this blog-oriented local evidence snapshot"),
+    ];
+    if native_columnar_rows == 0 {
+        remaining_before_report_ready.insert(
+            2,
+            String::from(
+                "sample native Arrow IPC and Parquet resource catalog rows with --families data before making data-format conclusions",
+            ),
+        );
+    }
     let evidence = json!({
         "schema": "carbon.evidence.scalability_matrix.v1",
         "gate": "bench-scalability",
@@ -4690,7 +4703,7 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             config.families.iter().cloned().collect::<Vec<_>>().join(","),
             config.samples
         ),
-        "recommended_blog_command": "RUSTFLAGS=\"-C target-cpu=native\" cargo run --release -p xtask -- bench-scalability --tier quick",
+        "recommended_blog_command": "scripts/carbon-native-bench.sh bench-scalability --tier quick --families scheduler,io,data --samples 5",
         "duration_ms": started.elapsed().as_millis() as u64,
         "host": {
             "os": env::consts::OS,
@@ -4725,12 +4738,7 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             "Rust data pipeline pressure for checksum/compression and catalog export/parse rows",
             "process resource metrics for every row when /usr/bin/time -v is available"
         ],
-        "remaining_before_report_ready": [
-            "add comparable legacy scheduler process pressure rows before claiming scheduler speedups",
-            "add captured legacy Carbon IO rows before claiming Carbon IO speedups",
-            "sample native Arrow IPC and Parquet resource catalog rows with --families data before making data-format conclusions",
-            "decide CI thresholds separately from this blog-oriented local evidence snapshot"
-        ]
+        "remaining_before_report_ready": remaining_before_report_ready
     });
     write_json(&config.output, &evidence)?;
     println!(
@@ -15778,7 +15786,7 @@ fn scheduler_comparison_report_ready_blockers(value: &Value) -> Vec<Value> {
         blockers.push(readiness_blocker(
             "scheduler_comparison_not_release_native",
             "scheduler comparison evidence was not produced by release-native target-cpu=native without debug assertions",
-            "rerun scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set pressure --tier quick --samples 10",
+            "rerun scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set all --tier quick --samples 10",
         ));
     }
     blockers
