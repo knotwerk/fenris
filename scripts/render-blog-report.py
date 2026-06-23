@@ -360,16 +360,16 @@ def architecture_section() -> str:
 def scheduler_story_section() -> str:
     items = [
         (
-            "Scheduler value",
-            "The scheduler story is not that Rust is faster. It is that tasklet scheduling becomes cheaper, more predictable, and easier to scale across domains.",
+            "Evidence status",
+            "This run proves the resource-pipeline comparison, not scheduler orchestration yet. The scheduler line is the next validation thesis: tasklet scheduling should become cheaper, more predictable, and easier to scale across domains.",
         ),
         (
-            "What to measure next",
-            "The next comparison should measure tasklet handoff latency, channel latency, p99 tail stability, messages per core, memory per tasklet, and recovery from cancellation, timeout, disconnect, and overload.",
+            "Metrics required",
+            "To prove that thesis, the next run needs tasklet handoff latency, channel handoff latency, p99 and p99.9 tail stability, messages per core, memory per tasklet, scheduler overhead above raw transport, and failure recovery.",
         ),
         (
             "Game-environment gate",
-            "The next step is to run this in a real game environment to complete scheduler parity and identify the right optimizations, because the best path depends on the actual task graph, payload sizes, network shape, and failure modes.",
+            "Those metrics need to come from a real game environment, because the right optimization path depends on the actual task graph, fan-in and fan-out shape, payload sizes, network topology, cancellation patterns, and failure modes.",
         ),
     ]
     return "\n".join(

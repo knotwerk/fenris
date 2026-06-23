@@ -29,10 +29,14 @@ any broader resource-pipeline claim.
 ## Scheduler Story
 
 The scheduler claim should not be "Rust is faster." The stronger and more
-accurate claim is:
+accurate thesis to prove is:
 
 > Tasklet scheduling becomes cheaper, more predictable, and easier to scale
 > across domains.
+
+That thesis is not proven by the current resource-pipeline numbers. It needs
+matched old-vs-Rust scheduler metrics before it is promoted as a performance
+claim.
 
 For scheduler and distributed work, raw file throughput is not the central
 question. The central question is orchestration overhead: how much latency,
