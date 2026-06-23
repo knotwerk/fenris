@@ -1,0 +1,196 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "tasklet_invalid_run_switch_no_mutation",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitch::test_switch_blocked",
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitch::test_switch_blocked_trapped",
+      "tests/python/scheduler/tests/test_tasklet.py::TestTaskletThrowImmediate::test_kill_new",
+      "tests/python/scheduler/tests/test_tasklet.py::TestTaskletThrowImmediate::test_dead",
+      "carbonengine/scheduler/src/Tasklet.cpp::Tasklet::Run",
+      "carbonengine/scheduler/src/Tasklet.cpp::Tasklet::SwitchTo"
+    ],
+    "legacy_behavior": [
+      "Direct tasklet.run and tasklet.switch reject dead tasklets without requeueing or reviving them.",
+      "Direct tasklet.run and tasklet.switch reject blocked tasklets without mutating blocked channel queues or balance."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "channels": [
+      {
+        "id": "blocker"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "dead",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "dead"
+          }
+        ]
+      },
+      {
+        "id": "blocked",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "receive",
+            "channel": "blocker"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "blocked"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_tasklet",
+          "tasklet": "dead"
+        },
+        {
+          "op": "run_tasklet",
+          "tasklet": "dead"
+        },
+        {
+          "op": "switch",
+          "tasklet": "dead"
+        },
+        {
+          "op": "run_tasklet",
+          "tasklet": "blocked"
+        },
+        {
+          "op": "run_tasklet",
+          "tasklet": "blocked"
+        },
+        {
+          "op": "switch",
+          "tasklet": "blocked"
+        }
+      ]
+    }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      {
+        "kind": "scheduler.switch",
+        "from": "main",
+        "to": "dead",
+        "reason": "run_tasklet"
+      },
+      {
+        "kind": "tasklet.complete",
+        "tasklet": "dead"
+      },
+      {
+        "kind": "tasklet.operation_error",
+        "operation": "run",
+        "tasklet": "dead",
+        "reason": "dead"
+      },
+      {
+        "kind": "tasklet.operation_error",
+        "operation": "switch",
+        "tasklet": "dead",
+        "reason": "dead"
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "main",
+        "to": "blocked",
+        "reason": "run_tasklet"
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "blocked",
+        "to": "main",
+        "reason": "blocked"
+      },
+      {
+        "kind": "tasklet.operation_error",
+        "operation": "run",
+        "tasklet": "blocked",
+        "reason": "blocked"
+      },
+      {
+        "kind": "tasklet.operation_error",
+        "operation": "switch",
+        "tasklet": "blocked",
+        "reason": "blocked"
+      }
+    ],
+    "match_counts": [
+      {
+        "event": {
+          "kind": "tasklet.operation_error"
+        },
+        "count": 4
+      },
+      {
+        "event": {
+          "kind": "tasklet.operation_error",
+          "reason": "dead"
+        },
+        "count": 2
+      },
+      {
+        "event": {
+          "kind": "tasklet.operation_error",
+          "reason": "blocked"
+        },
+        "count": 2
+      }
+    ]
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "blocked_tasklet_count": 1,
+    "blocked_channel_count": 1,
+    "active_tasklet_count": 2,
+    "all_time_tasklet_count": 3,
+    "completed": [
+      "dead"
+    ],
+    "error": {
+      "type": "RuntimeError",
+      "message_contains": "blocked"
+    },
+    "tasklets": {
+      "dead": {
+        "alive": false,
+        "scheduled": false,
+        "blocked": false,
+        "times_switched_to": 1
+      },
+      "blocked": {
+        "alive": true,
+        "scheduled": false,
+        "blocked": true,
+        "blocked_on": "blocker",
+        "blocked_direction": "receive",
+        "times_switched_to": 1
+      }
+    },
+    "channels": {
+      "blocker": {
+        "balance": -1,
+        "blocked_senders": [],
+        "blocked_receivers": [
+          "blocked"
+        ]
+      }
+    }
+  }
+}

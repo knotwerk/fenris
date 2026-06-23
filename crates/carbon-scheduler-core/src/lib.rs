@@ -1592,7 +1592,9 @@ impl Runtime {
     }
 
     fn run_tasklet_entry(&mut self, tasklet: &str) -> Result<(), SchedulerError> {
-        self.ensure_tasklet_can_run(tasklet, "run")?;
+        if self.reject_invalid_tasklet_operation(tasklet, "run")? {
+            return Ok(());
+        }
         if self.reject_if_switch_trapped("main", "tasklet.run") {
             return Ok(());
         }
@@ -2798,7 +2800,9 @@ impl Runtime {
     }
 
     fn switch_tasklet_entry(&mut self, tasklet: &str) -> Result<(), SchedulerError> {
-        self.ensure_tasklet_can_run(tasklet, "switch")?;
+        if self.reject_invalid_tasklet_operation(tasklet, "switch")? {
+            return Ok(());
+        }
         if self.reject_if_switch_trapped("main", "tasklet.switch") {
             return Ok(());
         }
@@ -3668,6 +3672,41 @@ impl Runtime {
             });
         }
         Ok(())
+    }
+
+    fn reject_invalid_tasklet_operation(
+        &mut self,
+        tasklet: &str,
+        operation: &'static str,
+    ) -> Result<bool, SchedulerError> {
+        match self.ensure_tasklet_can_run(tasklet, operation) {
+            Ok(()) => Ok(false),
+            Err(SchedulerError::InvalidTaskletOperation {
+                tasklet: invalid_tasklet,
+                operation: invalid_operation,
+                reason,
+            }) if invalid_tasklet == tasklet && invalid_operation == operation => {
+                let error = json!({
+                    "type": "RuntimeError",
+                    "message_contains": reason
+                });
+                self.error = Some(error.clone());
+                self.emit(
+                    "tasklet.operation_error",
+                    [
+                        ("actor", json!("main")),
+                        ("operation", json!(operation)),
+                        ("tasklet", json!(tasklet)),
+                        ("reason", json!(reason)),
+                        ("error", error),
+                        ("run_count", json!(self.run_count())),
+                        ("runnable", json!(self.runnable_snapshot())),
+                    ],
+                );
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn advance_pc(&mut self, tasklet: &str) -> Result<(), SchedulerError> {
