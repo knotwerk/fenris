@@ -1,0 +1,464 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_block_trap_no_balance_change",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_block_trap_send",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_block_trap_recv",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_attempting_send_on_block_trapped_tasklet_does_not_change_balance",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_attempting_receive_on_block_trapped_tasklet_does_not_change_balance",
+      "carbonengine/scheduler/src/Channel.cpp::Send",
+      "carbonengine/scheduler/src/Channel.cpp::Receive"
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "channel_callbacks": true,
+    "channels": [
+      {
+        "id": "tasklet_send"
+      },
+      {
+        "id": "tasklet_receive"
+      },
+      {
+        "id": "main_send"
+      },
+      {
+        "id": "main_receive"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "trap_sender",
+        "body": [
+          {
+            "op": "set_block_trap",
+            "value": true
+          },
+          {
+            "op": "send",
+            "channel": "tasklet_send",
+            "value": "blocked"
+          }
+        ]
+      },
+      {
+        "id": "trap_receiver",
+        "body": [
+          {
+            "op": "set_block_trap",
+            "value": true
+          },
+          {
+            "op": "receive",
+            "channel": "tasklet_receive"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "set_block_trap",
+          "value": true
+        },
+        {
+          "op": "send",
+          "channel": "main_send",
+          "value": "blocked"
+        },
+        {
+          "op": "receive",
+          "channel": "main_receive"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "tasklet_send",
+      "kind": "channel.new",
+      "preference": -1,
+      "seq": 1
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "tasklet_receive",
+      "kind": "channel.new",
+      "preference": -1,
+      "seq": 2
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "main_send",
+      "kind": "channel.new",
+      "preference": -1,
+      "seq": 3
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "main_receive",
+      "kind": "channel.new",
+      "preference": -1,
+      "seq": 4
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "trap_sender"
+      ],
+      "scheduled": true,
+      "seq": 5,
+      "tasklet": "trap_sender"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "trap_sender",
+        "trap_receiver"
+      ],
+      "scheduled": true,
+      "seq": 6,
+      "tasklet": "trap_receiver"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 7
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 8,
+      "to": "trap_sender",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "trap_sender",
+      "block_trap": true,
+      "kind": "tasklet.block_trap",
+      "run_count": 2,
+      "seq": 9,
+      "tasklet": "trap_sender"
+    },
+    {
+      "actor": "trap_sender",
+      "balance": 0,
+      "callback": {
+        "balance": 0,
+        "channel": "tasklet_send",
+        "is_sending": true,
+        "tasklet": "trap_sender",
+        "will_block": true
+      },
+      "channel": "tasklet_send",
+      "is_sending": true,
+      "kind": "channel.callback",
+      "seq": 10,
+      "will_block": true
+    },
+    {
+      "actor": "trap_sender",
+      "channel": "tasklet_send",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 11,
+      "value": "blocked",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "trap_sender",
+      "channel": "tasklet_send",
+      "error": {
+        "message_contains": "Channel cannot block on main tasklet with block_trap set true",
+        "type": "RuntimeError"
+      },
+      "kind": "channel.error",
+      "seq": 12
+    },
+    {
+      "actor": "trap_sender",
+      "exception": {
+        "message_contains": "Channel cannot block on main tasklet with block_trap set true",
+        "type": "RuntimeError"
+      },
+      "kind": "tasklet.exception",
+      "seq": 13,
+      "tasklet": "trap_sender"
+    },
+    {
+      "actor": "trap_sender",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 14,
+      "tasklet": "trap_sender"
+    },
+    {
+      "actor": "trap_sender",
+      "from": "trap_sender",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 15,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 16,
+      "to": "trap_receiver",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "trap_receiver",
+      "block_trap": true,
+      "kind": "tasklet.block_trap",
+      "run_count": 1,
+      "seq": 17,
+      "tasklet": "trap_receiver"
+    },
+    {
+      "actor": "trap_receiver",
+      "balance": 0,
+      "callback": {
+        "balance": 0,
+        "channel": "tasklet_receive",
+        "is_sending": false,
+        "tasklet": "trap_receiver",
+        "will_block": true
+      },
+      "channel": "tasklet_receive",
+      "is_sending": false,
+      "kind": "channel.callback",
+      "seq": 18,
+      "will_block": true
+    },
+    {
+      "actor": "trap_receiver",
+      "channel": "tasklet_receive",
+      "kind": "channel.receive.attempt",
+      "seq": 19,
+      "waiting_senders": []
+    },
+    {
+      "actor": "trap_receiver",
+      "channel": "tasklet_receive",
+      "error": {
+        "message_contains": "Channel cannot block on main tasklet with block_trap set true",
+        "type": "RuntimeError"
+      },
+      "kind": "channel.error",
+      "seq": 20
+    },
+    {
+      "actor": "trap_receiver",
+      "exception": {
+        "message_contains": "Channel cannot block on main tasklet with block_trap set true",
+        "type": "RuntimeError"
+      },
+      "kind": "tasklet.exception",
+      "seq": 21,
+      "tasklet": "trap_receiver"
+    },
+    {
+      "actor": "trap_receiver",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 22,
+      "tasklet": "trap_receiver"
+    },
+    {
+      "actor": "trap_receiver",
+      "from": "trap_receiver",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 23,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "block_trap": true,
+      "kind": "tasklet.block_trap",
+      "run_count": 1,
+      "seq": 24,
+      "tasklet": "main"
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "callback": {
+        "balance": 0,
+        "channel": "main_send",
+        "is_sending": true,
+        "tasklet": "main",
+        "will_block": true
+      },
+      "channel": "main_send",
+      "is_sending": true,
+      "kind": "channel.callback",
+      "seq": 25,
+      "will_block": true
+    },
+    {
+      "actor": "main",
+      "channel": "main_send",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 26,
+      "value": "blocked",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "main",
+      "channel": "main_send",
+      "error": {
+        "message_contains": "Channel cannot block on main tasklet with block_trap set true",
+        "type": "RuntimeError"
+      },
+      "kind": "channel.error",
+      "operation": "send",
+      "seq": 27
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "callback": {
+        "balance": 0,
+        "channel": "main_receive",
+        "is_sending": false,
+        "tasklet": "main",
+        "will_block": true
+      },
+      "channel": "main_receive",
+      "is_sending": false,
+      "kind": "channel.callback",
+      "seq": 28,
+      "will_block": true
+    },
+    {
+      "actor": "main",
+      "channel": "main_receive",
+      "kind": "channel.receive.attempt",
+      "seq": 29,
+      "waiting_senders": []
+    },
+    {
+      "actor": "main",
+      "channel": "main_receive",
+      "error": {
+        "message_contains": "Channel cannot block on main tasklet with block_trap set true",
+        "type": "RuntimeError"
+      },
+      "kind": "channel.error",
+      "operation": "receive",
+      "seq": 30
+    }
+  ],
+  "expect": {
+    "error": {
+      "type": "RuntimeError",
+      "message_contains": "Channel cannot block on main tasklet with block_trap set true"
+    },
+    "channel_callbacks": [
+      {
+        "channel": "tasklet_send",
+        "tasklet": "trap_sender",
+        "is_sending": true,
+        "will_block": true
+      },
+      {
+        "channel": "tasklet_receive",
+        "tasklet": "trap_receiver",
+        "is_sending": false,
+        "will_block": true
+      },
+      {
+        "channel": "main_send",
+        "tasklet": "main",
+        "is_sending": true,
+        "will_block": true
+      },
+      {
+        "channel": "main_receive",
+        "tasklet": "main",
+        "is_sending": false,
+        "will_block": true
+      }
+    ],
+    "tasklets": {
+      "trap_sender": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "raised": {
+          "type": "RuntimeError",
+          "message_contains": "Channel cannot block on main tasklet with block_trap set true"
+        }
+      },
+      "trap_receiver": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "raised": {
+          "type": "RuntimeError",
+          "message_contains": "Channel cannot block on main tasklet with block_trap set true"
+        }
+      }
+    },
+    "channels": {
+      "tasklet_send": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      },
+      "tasklet_receive": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      },
+      "main_send": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      },
+      "main_receive": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

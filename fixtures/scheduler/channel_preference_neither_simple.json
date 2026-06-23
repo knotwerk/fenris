@@ -1,0 +1,52 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_preference_neither_simple",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_preference_neither_simple"
+    ]
+  },
+  "scenario": {
+    "channels": [{ "id": "ch0", "preference": 0 }],
+    "tasklets": [
+      {
+        "id": "receiver",
+        "body": [
+          { "op": "receive", "channel": "ch0" },
+          { "op": "append", "target": "completed", "value": "receiver_after_receive" }
+        ]
+      }
+    ],
+    "entrypoint": { "op": "run_scheduler_then_send_then_run", "channel": "ch0", "value": null }
+  },
+  "events": [
+    {"seq":0,"kind":"scheduler.start","actor":"main","current":"main","run_count":1,"runnable":["main"]},
+    {"seq":1,"kind":"channel.new","actor":"main","channel":"ch0","preference":0,"balance":0},
+    {"seq":2,"kind":"tasklet.new","actor":"main","tasklet":"receiver","alive":true,"scheduled":true,"run_count":2,"runnable":["main","receiver"]},
+    {"seq":3,"kind":"scheduler.run.start","actor":"main","limit":"until_idle"},
+    {"seq":4,"kind":"scheduler.switch","actor":"main","from":"main","to":"receiver","reason":"next_runnable"},
+    {"seq":5,"kind":"channel.receive.attempt","actor":"receiver","channel":"ch0","waiting_senders":[]},
+    {"seq":6,"kind":"channel.block","actor":"receiver","channel":"ch0","direction":"receive","balance":-1,"blocked_senders":[],"blocked_receivers":["receiver"]},
+    {"seq":7,"kind":"scheduler.switch","actor":"receiver","from":"receiver","to":"main","reason":"blocked"},
+    {"seq":8,"kind":"channel.send.attempt","actor":"main","channel":"ch0","value":null,"waiting_receivers":["receiver"]},
+    {"seq":9,"kind":"channel.transfer","actor":"main","channel":"ch0","sender":"main","receiver":"receiver","value":null,"preference":0,"preferred_continuation":"receiver","balance":0},
+    {"seq":10,"kind":"scheduler.run.start","actor":"main","limit":"until_idle"},
+    {"seq":11,"kind":"scheduler.switch","actor":"main","from":"main","to":"receiver","reason":"next_runnable"},
+    {"seq":12,"kind":"tasklet.observed","actor":"receiver","target":"completed","value":"receiver_after_receive","completed":["receiver_after_receive"]},
+    {"seq":13,"kind":"tasklet.complete","actor":"receiver","tasklet":"receiver","alive":false},
+    {"seq":14,"kind":"scheduler.switch","actor":"receiver","from":"receiver","to":"main","reason":"run_complete"}
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": ["receiver_after_receive"],
+    "channels": {
+      "ch0": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

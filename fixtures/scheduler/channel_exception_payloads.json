@@ -1,0 +1,453 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_exception_payloads",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_send_exception",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_send_throw",
+      "carbonengine/scheduler/src/PyChannel.cpp::ChannelSendException",
+      "carbonengine/scheduler/src/PyChannel.cpp::ChannelSendThrow",
+      "carbonengine/scheduler/src/Channel.cpp::Receive"
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "channels": [
+      {
+        "id": "exc",
+        "preference": 1
+      },
+      {
+        "id": "throw",
+        "preference": 1
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "recv_exc",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "exc"
+          }
+        ]
+      },
+      {
+        "id": "send_exc",
+        "body": [
+          {
+            "op": "send_exception",
+            "channel": "exc",
+            "exception": "ValueError",
+            "args": [
+              1,
+              2,
+              3
+            ]
+          }
+        ]
+      },
+      {
+        "id": "recv_throw",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "throw"
+          }
+        ]
+      },
+      {
+        "id": "send_throw",
+        "body": [
+          {
+            "op": "send_throw",
+            "channel": "throw",
+            "exception": "ValueError",
+            "value": [
+              1,
+              2,
+              3
+            ],
+            "traceback": "bar"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "run_scheduler"
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "exc",
+      "kind": "channel.new",
+      "preference": 1,
+      "seq": 1
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "throw",
+      "kind": "channel.new",
+      "preference": 1,
+      "seq": 2
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "recv_exc"
+      ],
+      "scheduled": true,
+      "seq": 3,
+      "tasklet": "recv_exc"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "recv_exc",
+        "send_exc"
+      ],
+      "scheduled": true,
+      "seq": 4,
+      "tasklet": "send_exc"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 4,
+      "runnable": [
+        "main",
+        "recv_exc",
+        "send_exc",
+        "recv_throw"
+      ],
+      "scheduled": true,
+      "seq": 5,
+      "tasklet": "recv_throw"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 5,
+      "runnable": [
+        "main",
+        "recv_exc",
+        "send_exc",
+        "recv_throw",
+        "send_throw"
+      ],
+      "scheduled": true,
+      "seq": 6,
+      "tasklet": "send_throw"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 7
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 8,
+      "to": "recv_exc",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "recv_exc",
+      "channel": "exc",
+      "kind": "channel.receive.attempt",
+      "seq": 9,
+      "waiting_senders": []
+    },
+    {
+      "actor": "recv_exc",
+      "balance": -1,
+      "blocked_receivers": [
+        "recv_exc"
+      ],
+      "blocked_senders": [],
+      "channel": "exc",
+      "direction": "receive",
+      "kind": "channel.block",
+      "seq": 10
+    },
+    {
+      "actor": "recv_exc",
+      "from": "recv_exc",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 11,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 12,
+      "to": "send_exc",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "send_exc",
+      "channel": "exc",
+      "kind": "channel.send.attempt",
+      "payload_kind": "exception",
+      "seq": 13,
+      "value": {
+        "args": [
+          1,
+          2,
+          3
+        ],
+        "exception": "ValueError",
+        "type": "exception"
+      },
+      "waiting_receivers": [
+        "recv_exc"
+      ]
+    },
+    {
+      "actor": "send_exc",
+      "balance": 0,
+      "channel": "exc",
+      "kind": "channel.transfer",
+      "payload_kind": "exception",
+      "preference": 1,
+      "preferred_continuation": "send_exc",
+      "receiver": "recv_exc",
+      "sender": "send_exc",
+      "seq": 14,
+      "value": {
+        "args": [
+          1,
+          2,
+          3
+        ],
+        "exception": "ValueError",
+        "type": "exception"
+      }
+    },
+    {
+      "actor": "recv_exc",
+      "error": {
+        "args": [
+          1,
+          2,
+          3
+        ],
+        "type": "ValueError"
+      },
+      "kind": "tasklet.exception",
+      "seq": 15,
+      "tasklet": "recv_exc"
+    },
+    {
+      "actor": "send_exc",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 16,
+      "tasklet": "send_exc"
+    },
+    {
+      "actor": "send_exc",
+      "from": "send_exc",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 17,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 18,
+      "to": "recv_throw",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "recv_throw",
+      "channel": "throw",
+      "kind": "channel.receive.attempt",
+      "seq": 19,
+      "waiting_senders": []
+    },
+    {
+      "actor": "recv_throw",
+      "balance": -1,
+      "blocked_receivers": [
+        "recv_throw"
+      ],
+      "blocked_senders": [],
+      "channel": "throw",
+      "direction": "receive",
+      "kind": "channel.block",
+      "seq": 20
+    },
+    {
+      "actor": "recv_throw",
+      "from": "recv_throw",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 21,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 22,
+      "to": "send_throw",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "send_throw",
+      "channel": "throw",
+      "kind": "channel.send.attempt",
+      "payload_kind": "throw",
+      "seq": 23,
+      "value": {
+        "exception": "ValueError",
+        "traceback": "bar",
+        "type": "throw",
+        "value": [
+          1,
+          2,
+          3
+        ]
+      },
+      "waiting_receivers": [
+        "recv_throw"
+      ]
+    },
+    {
+      "actor": "send_throw",
+      "balance": 0,
+      "channel": "throw",
+      "kind": "channel.transfer",
+      "payload_kind": "throw",
+      "preference": 1,
+      "preferred_continuation": "send_throw",
+      "receiver": "recv_throw",
+      "sender": "send_throw",
+      "seq": 24,
+      "value": {
+        "exception": "ValueError",
+        "traceback": "bar",
+        "type": "throw",
+        "value": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "actor": "recv_throw",
+      "error": {
+        "traceback": "bar",
+        "type": "ValueError",
+        "value": [
+          1,
+          2,
+          3
+        ]
+      },
+      "kind": "tasklet.exception",
+      "seq": 25,
+      "tasklet": "recv_throw"
+    },
+    {
+      "actor": "send_throw",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 26,
+      "tasklet": "send_throw"
+    },
+    {
+      "actor": "send_throw",
+      "from": "send_throw",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 27,
+      "to": "main"
+    }
+  ],
+  "expect": {
+    "tasklets": {
+      "recv_exc": {
+        "alive": false,
+        "blocked": false,
+        "raised": {
+          "type": "ValueError",
+          "args": [
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "recv_throw": {
+        "alive": false,
+        "blocked": false,
+        "raised": {
+          "type": "ValueError",
+          "value": [
+            1,
+            2,
+            3
+          ],
+          "traceback": "bar"
+        }
+      },
+      "send_exc": {
+        "alive": false,
+        "blocked": false
+      },
+      "send_throw": {
+        "alive": false,
+        "blocked": false
+      }
+    },
+    "channels": {
+      "exc": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      },
+      "throw": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

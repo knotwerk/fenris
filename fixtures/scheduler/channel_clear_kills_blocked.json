@@ -1,0 +1,224 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_clear_kills_blocked",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_channel_test_clear_blocked",
+      "carbonengine/scheduler/src/Channel.cpp::ClearBlocked"
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "channels": [
+      {
+        "id": "ch0"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "sender1",
+        "body": [
+          {
+            "op": "send",
+            "channel": "ch0",
+            "value": "sender1"
+          }
+        ]
+      },
+      {
+        "id": "sender2",
+        "body": [
+          {
+            "op": "send",
+            "channel": "ch0",
+            "value": "sender2"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "clear",
+          "channel": "ch0"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "ch0",
+      "kind": "channel.new",
+      "preference": -1,
+      "seq": 1
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "sender1"
+      ],
+      "scheduled": true,
+      "seq": 2,
+      "tasklet": "sender1"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "sender1",
+        "sender2"
+      ],
+      "scheduled": true,
+      "seq": 3,
+      "tasklet": "sender2"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 4
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 5,
+      "to": "sender1",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender1",
+      "channel": "ch0",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 6,
+      "value": "sender1",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "sender1",
+      "balance": 1,
+      "blocked_receivers": [],
+      "blocked_senders": [
+        "sender1"
+      ],
+      "channel": "ch0",
+      "direction": "send",
+      "kind": "channel.block",
+      "seq": 7
+    },
+    {
+      "actor": "sender1",
+      "from": "sender1",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 8,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 9,
+      "to": "sender2",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender2",
+      "channel": "ch0",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 10,
+      "value": "sender2",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "sender2",
+      "balance": 2,
+      "blocked_receivers": [],
+      "blocked_senders": [
+        "sender1",
+        "sender2"
+      ],
+      "channel": "ch0",
+      "direction": "send",
+      "kind": "channel.block",
+      "seq": 11
+    },
+    {
+      "actor": "sender2",
+      "from": "sender2",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 12,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "ch0",
+      "closed": false,
+      "closing": false,
+      "killed_tasklets": [
+        "sender1",
+        "sender2"
+      ],
+      "kind": "channel.clear",
+      "pending": false,
+      "receivers": [],
+      "senders": [
+        "sender1",
+        "sender2"
+      ],
+      "seq": 13
+    }
+  ],
+  "expect": {
+    "run_count": 1,
+    "tasklets": {
+      "sender1": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false
+      },
+      "sender2": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false
+      }
+    },
+    "channels": {
+      "ch0": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

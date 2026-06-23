@@ -1,0 +1,371 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_close_open_parity",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_closing",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_open",
+      "carbonengine/scheduler/src/Channel.cpp::Close",
+      "carbonengine/scheduler/src/Channel.cpp::Open",
+      "carbonengine/scheduler/src/Channel.cpp::UpdateCloseState"
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "channels": [
+      {
+        "id": "ch0",
+        "preference": 0
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "sender_before_close",
+        "body": [
+          {
+            "op": "send",
+            "channel": "ch0",
+            "value": "before-close"
+          }
+        ]
+      },
+      {
+        "id": "receiver_after_open",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "receive",
+            "channel": "ch0",
+            "bind": "received"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver_after_open"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "close",
+          "channel": "ch0"
+        },
+        {
+          "op": "receive",
+          "channel": "ch0",
+          "bind": "main_received"
+        },
+        {
+          "op": "open",
+          "channel": "ch0"
+        },
+        {
+          "op": "insert",
+          "tasklet": "receiver_after_open"
+        },
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "send",
+          "channel": "ch0",
+          "value": "after-open"
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "ch0",
+      "kind": "channel.new",
+      "preference": 0,
+      "seq": 1
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "sender_before_close"
+      ],
+      "scheduled": true,
+      "seq": 2,
+      "tasklet": "sender_before_close"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 3
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 4,
+      "to": "sender_before_close",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender_before_close",
+      "channel": "ch0",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 5,
+      "value": "before-close",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "sender_before_close",
+      "balance": 1,
+      "blocked_receivers": [],
+      "blocked_senders": [
+        "sender_before_close"
+      ],
+      "channel": "ch0",
+      "direction": "send",
+      "kind": "channel.block",
+      "seq": 6
+    },
+    {
+      "actor": "sender_before_close",
+      "from": "sender_before_close",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 7,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "balance": 1,
+      "channel": "ch0",
+      "closed": false,
+      "closing": true,
+      "kind": "channel.close",
+      "seq": 8
+    },
+    {
+      "actor": "main",
+      "channel": "ch0",
+      "kind": "channel.receive.attempt",
+      "seq": 9,
+      "waiting_senders": [
+        "sender_before_close"
+      ]
+    },
+    {
+      "actor": "sender_before_close",
+      "balance": 0,
+      "channel": "ch0",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": 0,
+      "preferred_continuation": "main",
+      "receiver": "main",
+      "sender": "sender_before_close",
+      "seq": 10,
+      "value": "before-close"
+    },
+    {
+      "actor": "main",
+      "channel": "ch0",
+      "closed": false,
+      "kind": "channel.open",
+      "seq": 11
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.insert",
+      "paused": false,
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "sender_before_close",
+        "receiver_after_open"
+      ],
+      "scheduled": true,
+      "seq": 12,
+      "tasklet": "receiver_after_open"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 13
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 14,
+      "to": "sender_before_close",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "sender_before_close",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 15,
+      "tasklet": "sender_before_close"
+    },
+    {
+      "actor": "sender_before_close",
+      "from": "sender_before_close",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 16,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 17,
+      "to": "receiver_after_open",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver_after_open",
+      "channel": "ch0",
+      "kind": "channel.receive.attempt",
+      "seq": 18,
+      "waiting_senders": []
+    },
+    {
+      "actor": "receiver_after_open",
+      "balance": -1,
+      "blocked_receivers": [
+        "receiver_after_open"
+      ],
+      "blocked_senders": [],
+      "channel": "ch0",
+      "direction": "receive",
+      "kind": "channel.block",
+      "seq": 19
+    },
+    {
+      "actor": "receiver_after_open",
+      "from": "receiver_after_open",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 20,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "channel": "ch0",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 21,
+      "value": "after-open",
+      "waiting_receivers": [
+        "receiver_after_open"
+      ]
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "ch0",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": 0,
+      "preferred_continuation": "receiver_after_open",
+      "receiver": "receiver_after_open",
+      "sender": "main",
+      "seq": 22,
+      "value": "after-open"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 23
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 24,
+      "to": "receiver_after_open",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "receiver_after_open",
+      "completed": [
+        "receiver_after_open"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 25,
+      "target": "completed",
+      "value": "receiver_after_open"
+    },
+    {
+      "actor": "receiver_after_open",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 26,
+      "tasklet": "receiver_after_open"
+    },
+    {
+      "actor": "receiver_after_open",
+      "from": "receiver_after_open",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 27,
+      "to": "main"
+    }
+  ],
+  "expect": {
+    "main_received": [
+      "before-close"
+    ],
+    "completed": [
+      "receiver_after_open"
+    ],
+    "tasklets": {
+      "receiver_after_open": {
+        "received": "after-open",
+        "alive": false,
+        "blocked": false
+      }
+    },
+    "channels": {
+      "ch0": {
+        "balance": 0,
+        "closed": false,
+        "closing": false,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

@@ -1,0 +1,291 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_closed_send_receive_errors",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_closed_channel",
+      "carbonengine/scheduler/src/Channel.cpp::Send",
+      "carbonengine/scheduler/src/Channel.cpp::Receive"
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "channels": [
+      {
+        "id": "closed",
+        "preference": 0
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "tasklet_sender",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "send",
+            "channel": "closed",
+            "value": "payload"
+          }
+        ]
+      },
+      {
+        "id": "tasklet_receiver",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "receive",
+            "channel": "closed"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "close",
+          "channel": "closed"
+        },
+        {
+          "op": "send",
+          "channel": "closed",
+          "value": "main-payload"
+        },
+        {
+          "op": "receive",
+          "channel": "closed"
+        },
+        {
+          "op": "insert",
+          "tasklet": "tasklet_sender"
+        },
+        {
+          "op": "insert",
+          "tasklet": "tasklet_receiver"
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "seq": 0,
+      "kind": "scheduler.start",
+      "actor": "main",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ]
+    },
+    {
+      "seq": 1,
+      "kind": "channel.new",
+      "actor": "main",
+      "channel": "closed",
+      "preference": 0,
+      "balance": 0
+    },
+    {
+      "seq": 2,
+      "kind": "channel.close",
+      "actor": "main",
+      "channel": "closed",
+      "balance": 0,
+      "closed": true,
+      "closing": true
+    },
+    {
+      "seq": 3,
+      "kind": "channel.send.attempt",
+      "actor": "main",
+      "channel": "closed",
+      "payload_kind": "value",
+      "value": "main-payload",
+      "waiting_receivers": []
+    },
+    {
+      "seq": 4,
+      "kind": "channel.error",
+      "actor": "main",
+      "channel": "closed",
+      "operation": "send",
+      "error": {
+        "message_contains": "Send operation on a closed channel",
+        "type": "ValueError"
+      }
+    },
+    {
+      "seq": 5,
+      "kind": "channel.receive.attempt",
+      "actor": "main",
+      "channel": "closed",
+      "waiting_senders": []
+    },
+    {
+      "seq": 6,
+      "kind": "channel.error",
+      "actor": "main",
+      "channel": "closed",
+      "operation": "receive",
+      "error": {
+        "message_contains": "receive operation on a closed channel",
+        "type": "ValueError"
+      }
+    },
+    {
+      "seq": 7,
+      "kind": "tasklet.insert",
+      "actor": "main",
+      "tasklet": "tasklet_sender",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "tasklet_sender"
+      ]
+    },
+    {
+      "seq": 8,
+      "kind": "tasklet.insert",
+      "actor": "main",
+      "tasklet": "tasklet_receiver",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "tasklet_sender",
+        "tasklet_receiver"
+      ]
+    },
+    {
+      "seq": 9,
+      "kind": "scheduler.run.start",
+      "actor": "main"
+    },
+    {
+      "seq": 10,
+      "kind": "scheduler.switch",
+      "actor": "main",
+      "to": "tasklet_sender",
+      "from": "main",
+      "reason": "next_runnable"
+    },
+    {
+      "seq": 11,
+      "kind": "channel.send.attempt",
+      "actor": "tasklet_sender",
+      "channel": "closed",
+      "payload_kind": "value",
+      "value": "payload",
+      "waiting_receivers": []
+    },
+    {
+      "seq": 12,
+      "kind": "channel.error",
+      "actor": "tasklet_sender",
+      "channel": "closed",
+      "error": {
+        "message_contains": "Send operation on a closed channel",
+        "type": "ValueError"
+      }
+    },
+    {
+      "seq": 13,
+      "kind": "tasklet.exception",
+      "actor": "tasklet_sender",
+      "tasklet": "tasklet_sender"
+    },
+    {
+      "seq": 14,
+      "kind": "tasklet.complete",
+      "actor": "tasklet_sender",
+      "tasklet": "tasklet_sender"
+    },
+    {
+      "seq": 15,
+      "kind": "scheduler.switch",
+      "actor": "tasklet_sender",
+      "to": "main",
+      "from": "tasklet_sender",
+      "reason": "tasklet_complete"
+    },
+    {
+      "seq": 16,
+      "kind": "scheduler.switch",
+      "actor": "main",
+      "to": "tasklet_receiver",
+      "from": "main",
+      "reason": "next_runnable"
+    },
+    {
+      "seq": 17,
+      "kind": "channel.receive.attempt",
+      "actor": "tasklet_receiver",
+      "channel": "closed",
+      "waiting_senders": []
+    },
+    {
+      "seq": 18,
+      "kind": "channel.error",
+      "actor": "tasklet_receiver",
+      "channel": "closed",
+      "error": {
+        "message_contains": "receive operation on a closed channel",
+        "type": "ValueError"
+      }
+    },
+    {
+      "seq": 19,
+      "kind": "tasklet.exception",
+      "actor": "tasklet_receiver",
+      "tasklet": "tasklet_receiver"
+    },
+    {
+      "seq": 20,
+      "kind": "tasklet.complete",
+      "actor": "tasklet_receiver",
+      "tasklet": "tasklet_receiver"
+    },
+    {
+      "seq": 21,
+      "kind": "scheduler.switch",
+      "actor": "tasklet_receiver",
+      "to": "main",
+      "from": "tasklet_receiver",
+      "reason": "run_complete"
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "error": {
+      "type": "ValueError"
+    },
+    "channels": {
+      "closed": {
+        "balance": 0,
+        "closed": true,
+        "closing": true,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    },
+    "tasklets": {
+      "tasklet_sender": {
+        "alive": false,
+        "raised": {
+          "type": "ValueError",
+          "message_contains": "Send operation on a closed channel"
+        }
+      },
+      "tasklet_receiver": {
+        "alive": false,
+        "raised": {
+          "type": "ValueError",
+          "message_contains": "receive operation on a closed channel"
+        }
+      }
+    }
+  }
+}

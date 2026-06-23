@@ -1,0 +1,75 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "scheduler_timeout_zero_leaves_remaining_scheduled",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/capiTest/Scheduler.cpp::PyScheduler_RunForTime"
+    ],
+    "notes": [
+      "Zero/expired RunSchedulerWithTimeout runs one pending tasklet, records last-timeout counters, and leaves remaining scheduled tasklets runnable for a later scheduler drain."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "tasklets": [
+      {
+        "id": "first",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "first"
+          }
+        ]
+      },
+      {
+        "id": "second",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "second"
+          }
+        ]
+      },
+      {
+        "id": "third",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "third"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "run_scheduler_with_timeout",
+      "timeout_ns": 0
+    }
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 3,
+    "last_timeout_completed_tasklets": 1,
+    "last_timeout_switched_tasklets": 2,
+    "completed": [
+      "first"
+    ],
+    "tasklets": {
+      "first": {
+        "alive": false,
+        "scheduled": false
+      },
+      "second": {
+        "alive": true,
+        "scheduled": true
+      },
+      "third": {
+        "alive": true,
+        "scheduled": true
+      }
+    }
+  }
+}

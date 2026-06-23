@@ -1,0 +1,75 @@
+{
+  "schema": "carbon.io.semantic_trace_fixture.v1",
+  "fixture": "socketpair_recv_send_wake",
+  "kind": "socket",
+  "feature_area": "carbonio socket scheduler wake",
+  "source_refs": [
+    "carbonengine/io/src/socketmodule.cpp",
+    "carbonengine/io/src/carbonio.cpp",
+    "carbonengine/io/tests/python/carboniotests/test/test_socket.py"
+  ],
+  "claim_scope": "expected normalized event order only; not a legacy Carbon IO comparison until captured from legacy carbonio/_socket artifacts",
+  "covered_behaviors": [
+    "receiver tasklet blocks on socket read",
+    "sender write wakes the blocked receiver through the IO callback path",
+    "channel balance returns to zero after the wake and receive result"
+  ],
+  "expected_events": [
+    {
+      "event": "socketpair.create",
+      "actor": "main"
+    },
+    {
+      "event": "tasklet.spawn",
+      "tasklet": "receiver"
+    },
+    {
+      "event": "socket.recv.block",
+      "tasklet": "receiver",
+      "socket": "server"
+    },
+    {
+      "event": "channel.balance",
+      "channel": "io_wait",
+      "balance": -1
+    },
+    {
+      "event": "socket.send",
+      "actor": "sender",
+      "socket": "client",
+      "bytes": 7
+    },
+    {
+      "event": "io.callback.readable",
+      "socket": "server",
+      "wakes": "receiver"
+    },
+    {
+      "event": "tasklet.resume",
+      "tasklet": "receiver"
+    },
+    {
+      "event": "socket.recv.result",
+      "tasklet": "receiver",
+      "socket": "server",
+      "bytes": 7
+    },
+    {
+      "event": "channel.balance",
+      "channel": "io_wait",
+      "balance": 0
+    }
+  ],
+  "required_order": [
+    "socketpair.create",
+    "tasklet.spawn",
+    "socket.recv.block",
+    "channel.balance",
+    "socket.send",
+    "io.callback.readable",
+    "tasklet.resume",
+    "socket.recv.result",
+    "channel.balance"
+  ],
+  "timings_excluded": true
+}

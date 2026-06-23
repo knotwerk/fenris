@@ -1,0 +1,183 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "tasklet_bind_setup_rebind_run",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_tasklet.py::TestBind::test_bind",
+      "tests/python/scheduler/tests/test_tasklet.py::TestBind::test_rebind_after_run"
+    ],
+    "legacy_behavior": [
+      "Tasklet.cpp::Tasklet::Bind marks an args-bound tasklet alive without scheduling it and resets times_switched_to.",
+      "Tasklet.cpp::Tasklet::Setup queues a bound tasklet for execution.",
+      "Tasklet.cpp::Tasklet::Bind can rebind a completed tasklet, and the next setup/run uses the new callable state."
+    ]
+  },
+  "scenario": {
+    "tasklets": [
+      {
+        "id": "worker",
+        "initially_scheduled": false,
+        "initially_bound": false,
+        "body": []
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "bind",
+          "tasklet": "worker",
+          "body": [
+            {
+              "op": "append",
+              "target": "results",
+              "value": 1
+            }
+          ],
+          "args_bound": true
+        },
+        {
+          "op": "run_tasklet",
+          "tasklet": "worker"
+        },
+        {
+          "op": "bind",
+          "tasklet": "worker",
+          "body": [
+            {
+              "op": "append",
+              "target": "results",
+              "value": 2
+            }
+          ]
+        },
+        {
+          "op": "setup",
+          "tasklet": "worker"
+        },
+        {
+          "op": "run_tasklet",
+          "tasklet": "worker"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "seq": 0,
+      "kind": "scheduler.start",
+      "actor": "main",
+      "run_count": 1
+    },
+    {
+      "seq": 1,
+      "kind": "tasklet.bind",
+      "tasklet": "worker",
+      "args_bound": true,
+      "alive": true,
+      "scheduled": false,
+      "paused": true,
+      "times_switched_to": 0
+    },
+    {
+      "seq": 2,
+      "kind": "scheduler.switch",
+      "from": "main",
+      "to": "worker",
+      "reason": "run_tasklet",
+      "to_times_switched_to": 1
+    },
+    {
+      "seq": 3,
+      "kind": "tasklet.observed",
+      "actor": "worker",
+      "results": [
+        1
+      ]
+    },
+    {
+      "seq": 4,
+      "kind": "tasklet.complete",
+      "tasklet": "worker",
+      "alive": false
+    },
+    {
+      "seq": 5,
+      "kind": "scheduler.switch",
+      "from": "worker",
+      "to": "main",
+      "reason": "run_complete"
+    },
+    {
+      "seq": 6,
+      "kind": "tasklet.bind",
+      "tasklet": "worker",
+      "args_bound": false,
+      "alive": false,
+      "scheduled": false,
+      "paused": false,
+      "times_switched_to": 0
+    },
+    {
+      "seq": 7,
+      "kind": "tasklet.setup",
+      "tasklet": "worker",
+      "alive": true,
+      "scheduled": true,
+      "paused": false,
+      "run_count": 2
+    },
+    {
+      "seq": 8,
+      "kind": "scheduler.switch",
+      "from": "main",
+      "to": "worker",
+      "reason": "run_tasklet",
+      "to_times_switched_to": 1
+    },
+    {
+      "seq": 9,
+      "kind": "tasklet.observed",
+      "actor": "worker",
+      "results": [
+        1,
+        2
+      ]
+    },
+    {
+      "seq": 10,
+      "kind": "tasklet.complete",
+      "tasklet": "worker",
+      "alive": false
+    },
+    {
+      "seq": 11,
+      "kind": "scheduler.switch",
+      "from": "worker",
+      "to": "main",
+      "reason": "run_complete"
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "results": [
+      1,
+      2
+    ],
+    "tasklets": {
+      "worker": {
+        "callable_bound": true,
+        "alive": false,
+        "scheduled": false,
+        "blocked": false,
+        "paused": false,
+        "pending_exit": false,
+        "times_switched_to": 1
+      }
+    },
+    "all_time_tasklet_count": 2,
+    "active_tasklet_count": 1
+  }
+}

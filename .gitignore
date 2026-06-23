@@ -1,0 +1,20 @@
+/target/
+/xtask/target/
+/carbon-scheduler-rs/target/
+**/target/
+
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*.pyc
+__pycache__/
+
+# Local CMake outputs inside submodules.
+/carbonengine/*/.cmake-*
+/carbonengine/*/cmake-build-*/
+/carbonengine/*/vcpkg_registry_cache/
+
+# Local machine state.
+.DS_Store
+*.log

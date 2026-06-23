@@ -1,0 +1,90 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "tasklet_unbind_paused",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_tasklet.py::TestBind::test_unbind_ok"
+    ],
+    "legacy_behavior": [
+      "Tasklet.cpp::Tasklet::Remove pauses a live tasklet and removes it from the run queue.",
+      "Tasklet.cpp::Tasklet::UnBind rejects scheduled/current tasklets but clears a paused tasklet callable and marks it dead."
+    ]
+  },
+  "scenario": {
+    "tasklets": [
+      {
+        "id": "paused",
+        "body": [
+          {
+            "op": "append",
+            "target": "results",
+            "value": "should_not_run"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "remove",
+          "tasklet": "paused"
+        },
+        {
+          "op": "unbind",
+          "tasklet": "paused"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "seq": 0,
+      "kind": "scheduler.start",
+      "actor": "main"
+    },
+    {
+      "seq": 1,
+      "kind": "tasklet.new",
+      "tasklet": "paused",
+      "alive": true,
+      "scheduled": true
+    },
+    {
+      "seq": 2,
+      "kind": "tasklet.remove",
+      "tasklet": "paused",
+      "alive": true,
+      "scheduled": false,
+      "paused": true,
+      "run_count": 1
+    },
+    {
+      "seq": 3,
+      "kind": "tasklet.unbind",
+      "tasklet": "paused",
+      "callable_bound": false,
+      "alive": false,
+      "scheduled": false,
+      "run_count": 1
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "tasklets": {
+      "paused": {
+        "callable_bound": false,
+        "alive": false,
+        "scheduled": false,
+        "blocked": false,
+        "paused": false,
+        "pending_exit": false,
+        "times_switched_to": 0
+      }
+    },
+    "all_time_tasklet_count": 2,
+    "active_tasklet_count": 1
+  }
+}

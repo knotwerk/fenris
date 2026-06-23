@@ -1,0 +1,122 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "tasklet_lifecycle_remove_insert_switch_times",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_tasklet.py::TestTasklets::test_remove_and_switch",
+      "tests/capiTest/Tasklet.cpp::PyTasklet_Insert"
+    ],
+    "legacy_behavior": [
+      "Tasklet.cpp::Tasklet::Remove pauses a live tasklet and removes it from the run queue.",
+      "Tasklet.cpp::Tasklet::Insert rejects dead/blocked tasklets and queues a paused live tasklet.",
+      "Tasklet.cpp::Tasklet::SwitchTo increments times_switched_to when the tasklet is switched to."
+    ]
+  },
+  "scenario": {
+    "tasklets": [
+      {
+        "id": "target",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "target"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "remove",
+          "tasklet": "target"
+        },
+        {
+          "op": "insert",
+          "tasklet": "target"
+        },
+        {
+          "op": "switch",
+          "tasklet": "target"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "seq": 0,
+      "kind": "scheduler.start",
+      "actor": "main"
+    },
+    {
+      "seq": 1,
+      "kind": "tasklet.new",
+      "tasklet": "target",
+      "scheduled": true
+    },
+    {
+      "seq": 2,
+      "kind": "tasklet.remove",
+      "tasklet": "target",
+      "alive": true,
+      "scheduled": false,
+      "paused": true
+    },
+    {
+      "seq": 3,
+      "kind": "tasklet.insert",
+      "tasklet": "target",
+      "scheduled": true,
+      "paused": false
+    },
+    {
+      "seq": 4,
+      "kind": "scheduler.switch",
+      "from": "main",
+      "to": "target",
+      "reason": "switch_tasklet",
+      "to_times_switched_to": 1
+    },
+    {
+      "seq": 5,
+      "kind": "tasklet.observed",
+      "actor": "target",
+      "completed": [
+        "target"
+      ]
+    },
+    {
+      "seq": 6,
+      "kind": "tasklet.complete",
+      "tasklet": "target"
+    },
+    {
+      "seq": 7,
+      "kind": "scheduler.switch",
+      "from": "target",
+      "to": "main",
+      "reason": "run_complete"
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": [
+      "target"
+    ],
+    "tasklets": {
+      "target": {
+        "alive": false,
+        "scheduled": false,
+        "blocked": false,
+        "paused": false,
+        "pending_exit": false,
+        "times_switched_to": 1
+      }
+    },
+    "all_time_tasklet_count": 2,
+    "active_tasklet_count": 1
+  }
+}

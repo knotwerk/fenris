@@ -1,0 +1,424 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "main_send_deadlock_after_running_child_tasklets",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_main_tasklet_send_deadlock_after_running_child_tasklets",
+      "carbonengine/scheduler/src/Channel.cpp::Send"
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "channels": [
+      {
+        "id": "ch0",
+        "preference": -1
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "noop_0",
+        "body": [
+          {
+            "op": "append",
+            "target": "run_order",
+            "value": 0
+          }
+        ]
+      },
+      {
+        "id": "noop_1",
+        "body": [
+          {
+            "op": "append",
+            "target": "run_order",
+            "value": 1
+          }
+        ]
+      },
+      {
+        "id": "noop_2",
+        "body": [
+          {
+            "op": "append",
+            "target": "run_order",
+            "value": 2
+          }
+        ]
+      },
+      {
+        "id": "noop_3",
+        "body": [
+          {
+            "op": "append",
+            "target": "run_order",
+            "value": 3
+          }
+        ]
+      },
+      {
+        "id": "noop_4",
+        "body": [
+          {
+            "op": "append",
+            "target": "run_order",
+            "value": 4
+          }
+        ]
+      },
+      {
+        "id": "noop_5",
+        "body": [
+          {
+            "op": "append",
+            "target": "run_order",
+            "value": 5
+          }
+        ]
+      },
+      {
+        "id": "noop_6",
+        "body": [
+          {
+            "op": "append",
+            "target": "run_order",
+            "value": 6
+          }
+        ]
+      },
+      {
+        "id": "noop_7",
+        "body": [
+          {
+            "op": "append",
+            "target": "run_order",
+            "value": 7
+          }
+        ]
+      },
+      {
+        "id": "noop_8",
+        "body": [
+          {
+            "op": "append",
+            "target": "run_order",
+            "value": 8
+          }
+        ]
+      },
+      {
+        "id": "noop_9",
+        "body": [
+          {
+            "op": "append",
+            "target": "run_order",
+            "value": 9
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "send",
+          "channel": "ch0",
+          "value": 1
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "ch0",
+      "kind": "channel.new",
+      "preference": -1,
+      "seq": 1
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "noop_0"
+      ],
+      "scheduled": true,
+      "seq": 2,
+      "tasklet": "noop_0"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "noop_0",
+        "noop_1"
+      ],
+      "scheduled": true,
+      "seq": 3,
+      "tasklet": "noop_1"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 4,
+      "runnable": [
+        "main",
+        "noop_0",
+        "noop_1",
+        "noop_2"
+      ],
+      "scheduled": true,
+      "seq": 4,
+      "tasklet": "noop_2"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 5,
+      "runnable": [
+        "main",
+        "noop_0",
+        "noop_1",
+        "noop_2",
+        "noop_3"
+      ],
+      "scheduled": true,
+      "seq": 5,
+      "tasklet": "noop_3"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 6,
+      "runnable": [
+        "main",
+        "noop_0",
+        "noop_1",
+        "noop_2",
+        "noop_3",
+        "noop_4"
+      ],
+      "scheduled": true,
+      "seq": 6,
+      "tasklet": "noop_4"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 7,
+      "runnable": [
+        "main",
+        "noop_0",
+        "noop_1",
+        "noop_2",
+        "noop_3",
+        "noop_4",
+        "noop_5"
+      ],
+      "scheduled": true,
+      "seq": 7,
+      "tasklet": "noop_5"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 8,
+      "runnable": [
+        "main",
+        "noop_0",
+        "noop_1",
+        "noop_2",
+        "noop_3",
+        "noop_4",
+        "noop_5",
+        "noop_6"
+      ],
+      "scheduled": true,
+      "seq": 8,
+      "tasklet": "noop_6"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 9,
+      "runnable": [
+        "main",
+        "noop_0",
+        "noop_1",
+        "noop_2",
+        "noop_3",
+        "noop_4",
+        "noop_5",
+        "noop_6",
+        "noop_7"
+      ],
+      "scheduled": true,
+      "seq": 9,
+      "tasklet": "noop_7"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 10,
+      "runnable": [
+        "main",
+        "noop_0",
+        "noop_1",
+        "noop_2",
+        "noop_3",
+        "noop_4",
+        "noop_5",
+        "noop_6",
+        "noop_7",
+        "noop_8"
+      ],
+      "scheduled": true,
+      "seq": 10,
+      "tasklet": "noop_8"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 11,
+      "runnable": [
+        "main",
+        "noop_0",
+        "noop_1",
+        "noop_2",
+        "noop_3",
+        "noop_4",
+        "noop_5",
+        "noop_6",
+        "noop_7",
+        "noop_8",
+        "noop_9"
+      ],
+      "scheduled": true,
+      "seq": 11,
+      "tasklet": "noop_9"
+    },
+    {
+      "actor": "main",
+      "channel": "ch0",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 12,
+      "value": 1,
+      "waiting_receivers": []
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.drain_before_block",
+      "reason": "main_send_would_block",
+      "seq": 13,
+      "tasklets": [
+        "noop_0",
+        "noop_1",
+        "noop_2",
+        "noop_3",
+        "noop_4",
+        "noop_5",
+        "noop_6",
+        "noop_7",
+        "noop_8",
+        "noop_9"
+      ]
+    },
+    {
+      "actor": "main",
+      "kind": "tasklet.batch_complete",
+      "run_count": 1,
+      "run_order": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "seq": 14,
+      "tasklets": [
+        "noop_0",
+        "noop_1",
+        "noop_2",
+        "noop_3",
+        "noop_4",
+        "noop_5",
+        "noop_6",
+        "noop_7",
+        "noop_8",
+        "noop_9"
+      ]
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "ch0",
+      "error": {
+        "message_contains": "Deadlock",
+        "type": "RuntimeError"
+      },
+      "kind": "scheduler.deadlock",
+      "main_blocked": false,
+      "operation": "send",
+      "seq": 15
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "run_order": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "error": {
+      "type": "RuntimeError",
+      "message_contains": "Deadlock"
+    },
+    "channels": {
+      "ch0": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

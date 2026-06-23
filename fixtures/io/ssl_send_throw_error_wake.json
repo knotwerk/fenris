@@ -1,0 +1,64 @@
+{
+  "schema": "carbon.io.semantic_trace_fixture.v1",
+  "fixture": "ssl_send_throw_error_wake",
+  "kind": "ssl",
+  "feature_area": "c_channel SSL error propagation",
+  "source_refs": [
+    "carbonengine/io/src/c_channel.h",
+    "carbonengine/io/src/c_channel.cpp",
+    "carbonengine/io/src/_ssl.c"
+  ],
+  "claim_scope": "expected normalized event order only; paired with the current Scheduler.h smoke, but not a legacy Carbon IO extension comparison",
+  "covered_behaviors": [
+    "blocked SSL waiter is visible through channel balance",
+    "PyChannel_SendThrow wakes the blocked receiver",
+    "normalized RuntimeError payload is delivered to the receiver tasklet"
+  ],
+  "expected_events": [
+    {
+      "event": "tasklet.spawn",
+      "tasklet": "ssl_waiter"
+    },
+    {
+      "event": "channel.receive.block",
+      "tasklet": "ssl_waiter",
+      "channel": "ssl_errors"
+    },
+    {
+      "event": "channel.balance",
+      "channel": "ssl_errors",
+      "balance": -1
+    },
+    {
+      "event": "channel.send_throw",
+      "channel": "ssl_errors",
+      "exception": "RuntimeError",
+      "message": "ssl-wakeup"
+    },
+    {
+      "event": "tasklet.resume",
+      "tasklet": "ssl_waiter"
+    },
+    {
+      "event": "channel.receive.error",
+      "tasklet": "ssl_waiter",
+      "exception": "RuntimeError",
+      "message": "ssl-wakeup"
+    },
+    {
+      "event": "channel.balance",
+      "channel": "ssl_errors",
+      "balance": 0
+    }
+  ],
+  "required_order": [
+    "tasklet.spawn",
+    "channel.receive.block",
+    "channel.balance",
+    "channel.send_throw",
+    "tasklet.resume",
+    "channel.receive.error",
+    "channel.balance"
+  ],
+  "timings_excluded": true
+}

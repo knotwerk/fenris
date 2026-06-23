@@ -1,0 +1,391 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_block_trap_nonblocking_transfer",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_non_blocking_send",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_non_blocking_receive",
+      "carbonengine/scheduler/src/Channel.cpp::Send",
+      "carbonengine/scheduler/src/Channel.cpp::Receive"
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "channels": [
+      {
+        "id": "send_to_waiting_receiver",
+        "preference": -1
+      },
+      {
+        "id": "receive_from_waiting_sender",
+        "preference": 1
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "waiting_receiver",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "send_to_waiting_receiver",
+            "bind": "received"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "waiting_receiver"
+          }
+        ]
+      },
+      {
+        "id": "waiting_sender",
+        "body": [
+          {
+            "op": "send",
+            "channel": "receive_from_waiting_sender",
+            "value": "from-waiting-sender"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "waiting_sender"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "set_block_trap",
+          "value": true
+        },
+        {
+          "op": "send",
+          "channel": "send_to_waiting_receiver",
+          "value": "from-main"
+        },
+        {
+          "op": "receive",
+          "channel": "receive_from_waiting_sender",
+          "bind": "main_received"
+        },
+        {
+          "op": "set_block_trap",
+          "value": false
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "send_to_waiting_receiver",
+      "kind": "channel.new",
+      "preference": -1,
+      "seq": 1
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "receive_from_waiting_sender",
+      "kind": "channel.new",
+      "preference": 1,
+      "seq": 2
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "waiting_receiver"
+      ],
+      "scheduled": true,
+      "seq": 3,
+      "tasklet": "waiting_receiver"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "waiting_receiver",
+        "waiting_sender"
+      ],
+      "scheduled": true,
+      "seq": 4,
+      "tasklet": "waiting_sender"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 5
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 6,
+      "to": "waiting_receiver",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "waiting_receiver",
+      "channel": "send_to_waiting_receiver",
+      "kind": "channel.receive.attempt",
+      "seq": 7,
+      "waiting_senders": []
+    },
+    {
+      "actor": "waiting_receiver",
+      "balance": -1,
+      "blocked_receivers": [
+        "waiting_receiver"
+      ],
+      "blocked_senders": [],
+      "channel": "send_to_waiting_receiver",
+      "direction": "receive",
+      "kind": "channel.block",
+      "seq": 8
+    },
+    {
+      "actor": "waiting_receiver",
+      "from": "waiting_receiver",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 9,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 10,
+      "to": "waiting_sender",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "waiting_sender",
+      "channel": "receive_from_waiting_sender",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 11,
+      "value": "from-waiting-sender",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "waiting_sender",
+      "balance": 1,
+      "blocked_receivers": [],
+      "blocked_senders": [
+        "waiting_sender"
+      ],
+      "channel": "receive_from_waiting_sender",
+      "direction": "send",
+      "kind": "channel.block",
+      "seq": 12
+    },
+    {
+      "actor": "waiting_sender",
+      "from": "waiting_sender",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 13,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "block_trap": true,
+      "kind": "tasklet.block_trap",
+      "run_count": 1,
+      "seq": 14,
+      "tasklet": "main"
+    },
+    {
+      "actor": "main",
+      "channel": "send_to_waiting_receiver",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 15,
+      "value": "from-main",
+      "waiting_receivers": [
+        "waiting_receiver"
+      ]
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "send_to_waiting_receiver",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": -1,
+      "preferred_continuation": "waiting_receiver",
+      "receiver": "waiting_receiver",
+      "sender": "main",
+      "seq": 16,
+      "value": "from-main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "channel_preference_receiver",
+      "seq": 17,
+      "to": "waiting_receiver",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "waiting_receiver",
+      "completed": [
+        "waiting_receiver"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 18,
+      "target": "completed",
+      "value": "waiting_receiver"
+    },
+    {
+      "actor": "waiting_receiver",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 19,
+      "tasklet": "waiting_receiver"
+    },
+    {
+      "actor": "waiting_receiver",
+      "from": "waiting_receiver",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 20,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "channel": "receive_from_waiting_sender",
+      "kind": "channel.receive.attempt",
+      "seq": 21,
+      "waiting_senders": [
+        "waiting_sender"
+      ]
+    },
+    {
+      "actor": "waiting_sender",
+      "balance": 0,
+      "channel": "receive_from_waiting_sender",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": 1,
+      "preferred_continuation": "waiting_sender",
+      "receiver": "main",
+      "sender": "waiting_sender",
+      "seq": 22,
+      "value": "from-waiting-sender"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "channel_preference_sender",
+      "seq": 23,
+      "to": "waiting_sender",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "waiting_sender",
+      "completed": [
+        "waiting_receiver",
+        "waiting_sender"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 24,
+      "target": "completed",
+      "value": "waiting_sender"
+    },
+    {
+      "actor": "waiting_sender",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 25,
+      "tasklet": "waiting_sender"
+    },
+    {
+      "actor": "waiting_sender",
+      "from": "waiting_sender",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 26,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "block_trap": false,
+      "kind": "tasklet.block_trap",
+      "run_count": 1,
+      "seq": 27,
+      "tasklet": "main"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 28
+    }
+  ],
+  "expect": {
+    "completed": [
+      "waiting_receiver",
+      "waiting_sender"
+    ],
+    "main_received": [
+      "from-waiting-sender"
+    ],
+    "tasklets": {
+      "waiting_receiver": {
+        "alive": false,
+        "blocked": false,
+        "received": "from-main"
+      },
+      "waiting_sender": {
+        "alive": false,
+        "blocked": false
+      }
+    },
+    "channels": {
+      "send_to_waiting_receiver": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      },
+      "receive_from_waiting_sender": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

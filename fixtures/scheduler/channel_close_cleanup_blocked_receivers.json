@@ -1,0 +1,367 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_close_cleanup_blocked_receivers",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_kill_blocked_on_receive_on_closed",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_raise_exception_blocked_on_receive_on_closed",
+      "carbonengine/scheduler/src/Channel.cpp::RemoveTaskletFromBlocked",
+      "carbonengine/scheduler/src/Channel.cpp::UpdateCloseState"
+    ],
+    "legacy_behavior": [
+      "Closing a channel with blocked receivers marks it closing but not closed.",
+      "Killing or raising blocked receivers removes them from the channel queue.",
+      "The channel becomes fully closed when the final blocked receiver is removed."
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "channels": [
+      {
+        "id": "ch0"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "receiver1",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "ch0"
+          }
+        ]
+      },
+      {
+        "id": "receiver2",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "ch0"
+          }
+        ]
+      },
+      {
+        "id": "receiver3",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "ch0"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "close",
+          "channel": "ch0"
+        },
+        {
+          "op": "kill",
+          "tasklet": "receiver1"
+        },
+        {
+          "op": "raise_exception",
+          "tasklet": "receiver2",
+          "exception": "RuntimeError"
+        },
+        {
+          "op": "kill",
+          "tasklet": "receiver3"
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "ch0",
+      "kind": "channel.new",
+      "preference": -1,
+      "seq": 1
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "receiver1"
+      ],
+      "scheduled": true,
+      "seq": 2,
+      "tasklet": "receiver1"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "receiver1",
+        "receiver2"
+      ],
+      "scheduled": true,
+      "seq": 3,
+      "tasklet": "receiver2"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 4,
+      "runnable": [
+        "main",
+        "receiver1",
+        "receiver2",
+        "receiver3"
+      ],
+      "scheduled": true,
+      "seq": 4,
+      "tasklet": "receiver3"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 5
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 6,
+      "to": "receiver1",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver1",
+      "channel": "ch0",
+      "kind": "channel.receive.attempt",
+      "seq": 7,
+      "waiting_senders": []
+    },
+    {
+      "actor": "receiver1",
+      "balance": -1,
+      "blocked_receivers": [
+        "receiver1"
+      ],
+      "blocked_senders": [],
+      "channel": "ch0",
+      "direction": "receive",
+      "kind": "channel.block",
+      "seq": 8
+    },
+    {
+      "actor": "receiver1",
+      "from": "receiver1",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 9,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 10,
+      "to": "receiver2",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver2",
+      "channel": "ch0",
+      "kind": "channel.receive.attempt",
+      "seq": 11,
+      "waiting_senders": []
+    },
+    {
+      "actor": "receiver2",
+      "balance": -2,
+      "blocked_receivers": [
+        "receiver1",
+        "receiver2"
+      ],
+      "blocked_senders": [],
+      "channel": "ch0",
+      "direction": "receive",
+      "kind": "channel.block",
+      "seq": 12
+    },
+    {
+      "actor": "receiver2",
+      "from": "receiver2",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 13,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 14,
+      "to": "receiver3",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver3",
+      "channel": "ch0",
+      "kind": "channel.receive.attempt",
+      "seq": 15,
+      "waiting_senders": []
+    },
+    {
+      "actor": "receiver3",
+      "balance": -3,
+      "blocked_receivers": [
+        "receiver1",
+        "receiver2",
+        "receiver3"
+      ],
+      "blocked_senders": [],
+      "channel": "ch0",
+      "direction": "receive",
+      "kind": "channel.block",
+      "seq": 16
+    },
+    {
+      "actor": "receiver3",
+      "from": "receiver3",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 17,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "balance": -3,
+      "channel": "ch0",
+      "closed": false,
+      "closing": true,
+      "kind": "channel.close",
+      "seq": 18
+    },
+    {
+      "actor": "main",
+      "alive": false,
+      "kind": "tasklet.kill",
+      "pending": false,
+      "run_count": 1,
+      "scheduled": false,
+      "seq": 19,
+      "tasklet": "receiver1"
+    },
+    {
+      "actor": "main",
+      "exception": "RuntimeError",
+      "kind": "tasklet.raise_exception",
+      "scheduled": true,
+      "seq": 20,
+      "tasklet": "receiver2"
+    },
+    {
+      "actor": "main",
+      "alive": false,
+      "kind": "tasklet.kill",
+      "pending": false,
+      "run_count": 2,
+      "scheduled": false,
+      "seq": 21,
+      "tasklet": "receiver3"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 22
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 23,
+      "to": "receiver2",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "receiver2",
+      "exception": {
+        "type": "RuntimeError"
+      },
+      "kind": "tasklet.exception",
+      "seq": 24,
+      "tasklet": "receiver2"
+    },
+    {
+      "actor": "receiver2",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 25,
+      "tasklet": "receiver2"
+    },
+    {
+      "actor": "receiver2",
+      "from": "receiver2",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 26,
+      "to": "main"
+    }
+  ],
+  "expect": {
+    "run_count": 1,
+    "tasklets": {
+      "receiver1": {
+        "alive": false,
+        "blocked": false
+      },
+      "receiver2": {
+        "alive": false,
+        "blocked": false,
+        "raised": {
+          "type": "RuntimeError"
+        }
+      },
+      "receiver3": {
+        "alive": false,
+        "blocked": false
+      }
+    },
+    "channels": {
+      "ch0": {
+        "balance": 0,
+        "closed": true,
+        "closing": true,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

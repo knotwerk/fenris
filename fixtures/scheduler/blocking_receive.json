@@ -1,0 +1,124 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "blocking_receive",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_blocking_receive"
+    ]
+  },
+  "scenario": {
+    "channels": [
+      {
+        "id": "ch0",
+        "preference": -1
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "receiver",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "ch0"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "run_tasklet",
+      "tasklet": "receiver"
+    }
+  },
+  "events": [
+    {
+      "seq": 0,
+      "kind": "scheduler.start",
+      "actor": "main",
+      "current": "main",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ]
+    },
+    {
+      "seq": 1,
+      "kind": "channel.new",
+      "actor": "main",
+      "channel": "ch0",
+      "preference": -1,
+      "balance": 0
+    },
+    {
+      "seq": 2,
+      "kind": "tasklet.new",
+      "actor": "main",
+      "tasklet": "receiver",
+      "alive": true,
+      "scheduled": true,
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "receiver"
+      ]
+    },
+    {
+      "seq": 3,
+      "kind": "scheduler.switch",
+      "actor": "main",
+      "from": "main",
+      "to": "receiver",
+      "reason": "run_tasklet"
+    },
+    {
+      "seq": 4,
+      "kind": "channel.receive.attempt",
+      "actor": "receiver",
+      "channel": "ch0",
+      "waiting_senders": []
+    },
+    {
+      "seq": 5,
+      "kind": "channel.block",
+      "actor": "receiver",
+      "channel": "ch0",
+      "direction": "receive",
+      "balance": -1,
+      "blocked_senders": [],
+      "blocked_receivers": [
+        "receiver"
+      ]
+    },
+    {
+      "seq": 6,
+      "kind": "scheduler.switch",
+      "actor": "receiver",
+      "from": "receiver",
+      "to": "main",
+      "reason": "blocked"
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "tasklets": {
+      "receiver": {
+        "alive": true,
+        "blocked": true,
+        "blocked_on": "ch0",
+        "blocked_direction": "receive",
+        "scheduled": false
+      }
+    },
+    "channels": {
+      "ch0": {
+        "balance": -1,
+        "blocked_senders": [],
+        "blocked_receivers": [
+          "receiver"
+        ]
+      }
+    }
+  }
+}
+

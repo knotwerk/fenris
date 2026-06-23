@@ -1,0 +1,80 @@
+{
+  "schema": "carbon.io.semantic_trace_fixture.v1",
+  "fixture": "ssl_handshake_read_write_wake",
+  "kind": "ssl",
+  "feature_area": "carbonio SSL scheduler wake",
+  "source_refs": [
+    "carbonengine/io/src/_ssl.c",
+    "carbonengine/io/src/socketmodule.cpp",
+    "carbonengine/io/tests/python/carboniotests/test/test_ssl.py"
+  ],
+  "claim_scope": "expected normalized event order only; not a legacy Carbon IO comparison until captured from legacy carbonio/_ssl artifacts",
+  "covered_behaviors": [
+    "SSL client and server handshake complete before application payload exchange",
+    "blocked SSL read is resumed by a peer write callback",
+    "received payload length is preserved across the wake path"
+  ],
+  "expected_events": [
+    {
+      "event": "tcp.connect",
+      "actor": "client"
+    },
+    {
+      "event": "tcp.accept",
+      "actor": "server"
+    },
+    {
+      "event": "ssl.handshake.start",
+      "actors": [
+        "client",
+        "server"
+      ]
+    },
+    {
+      "event": "ssl.handshake.complete",
+      "actors": [
+        "client",
+        "server"
+      ]
+    },
+    {
+      "event": "tasklet.spawn",
+      "tasklet": "ssl_reader"
+    },
+    {
+      "event": "ssl.read.block",
+      "tasklet": "ssl_reader"
+    },
+    {
+      "event": "ssl.write",
+      "actor": "ssl_writer",
+      "bytes": 13
+    },
+    {
+      "event": "io.callback.ssl_readable",
+      "wakes": "ssl_reader"
+    },
+    {
+      "event": "tasklet.resume",
+      "tasklet": "ssl_reader"
+    },
+    {
+      "event": "ssl.read.result",
+      "tasklet": "ssl_reader",
+      "bytes": 13
+    }
+  ],
+  "required_order": [
+    "tcp.connect",
+    "tcp.accept",
+    "ssl.handshake.start",
+    "ssl.handshake.complete",
+    "tasklet.spawn",
+    "ssl.read.block",
+    "ssl.write",
+    "io.callback.ssl_readable",
+    "tasklet.resume",
+    "ssl.read.result"
+  ],
+  "timings_excluded": true
+}

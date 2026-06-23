@@ -1,0 +1,1709 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_preference_neither_multi_party_order",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_preference_neither",
+      "carbonengine/scheduler/src/Channel.cpp::Send",
+      "carbonengine/scheduler/src/Channel.cpp::Receive"
+    ],
+    "legacy_behavior": [
+      "Neutral channel preference resumes the matched sender/receiver later through the normal run queue.",
+      "Runnable tasklets created before and after the blocked pairs keep deterministic ordering.",
+      "Tasklets spawned inside senders and receivers run in the expected nested order."
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "channels": [
+      {
+        "id": "ch0",
+        "preference": 0
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "actually_first",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "actually first"
+          }
+        ]
+      },
+      {
+        "id": "actually_second",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "actually second"
+          }
+        ]
+      },
+      {
+        "id": "sender0",
+        "body": [
+          {
+            "op": "spawn",
+            "tasklet": "sender_between0"
+          },
+          {
+            "op": "send",
+            "channel": "ch0",
+            "value": "test"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": [
+              "sender",
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "id": "sender1",
+        "body": [
+          {
+            "op": "spawn",
+            "tasklet": "sender_between1"
+          },
+          {
+            "op": "send",
+            "channel": "ch0",
+            "value": "test"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": [
+              "sender",
+              1
+            ]
+          }
+        ]
+      },
+      {
+        "id": "sender2",
+        "body": [
+          {
+            "op": "spawn",
+            "tasklet": "sender_between2"
+          },
+          {
+            "op": "send",
+            "channel": "ch0",
+            "value": "test"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": [
+              "sender",
+              2
+            ]
+          }
+        ]
+      },
+      {
+        "id": "receiver0",
+        "body": [
+          {
+            "op": "spawn",
+            "tasklet": "receiver_between0"
+          },
+          {
+            "op": "receive",
+            "channel": "ch0",
+            "bind": "received"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": [
+              "receiver",
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "id": "receiver1",
+        "body": [
+          {
+            "op": "spawn",
+            "tasklet": "receiver_between1"
+          },
+          {
+            "op": "receive",
+            "channel": "ch0",
+            "bind": "received"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": [
+              "receiver",
+              1
+            ]
+          }
+        ]
+      },
+      {
+        "id": "receiver2",
+        "body": [
+          {
+            "op": "spawn",
+            "tasklet": "receiver_between2"
+          },
+          {
+            "op": "receive",
+            "channel": "ch0",
+            "bind": "received"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": [
+              "receiver",
+              2
+            ]
+          }
+        ]
+      },
+      {
+        "id": "tail0",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "tail0"
+          }
+        ]
+      },
+      {
+        "id": "tail1",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "tail1"
+          }
+        ]
+      },
+      {
+        "id": "tail2",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "tail2"
+          }
+        ]
+      },
+      {
+        "id": "sender_between0",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "sender inbetween 0"
+          }
+        ]
+      },
+      {
+        "id": "sender_between1",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "sender inbetween 1"
+          }
+        ]
+      },
+      {
+        "id": "sender_between2",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "sender inbetween 2"
+          }
+        ]
+      },
+      {
+        "id": "receiver_between0",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver inbetween 0"
+          }
+        ]
+      },
+      {
+        "id": "receiver_between1",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver inbetween 1"
+          }
+        ]
+      },
+      {
+        "id": "receiver_between2",
+        "initially_scheduled": false,
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver inbetween 2"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "run_scheduler"
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "ch0",
+      "kind": "channel.new",
+      "preference": 0,
+      "seq": 1
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "actually_first"
+      ],
+      "scheduled": true,
+      "seq": 2,
+      "tasklet": "actually_first"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "actually_first",
+        "actually_second"
+      ],
+      "scheduled": true,
+      "seq": 3,
+      "tasklet": "actually_second"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 4,
+      "runnable": [
+        "main",
+        "actually_first",
+        "actually_second",
+        "sender0"
+      ],
+      "scheduled": true,
+      "seq": 4,
+      "tasklet": "sender0"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 5,
+      "runnable": [
+        "main",
+        "actually_first",
+        "actually_second",
+        "sender0",
+        "sender1"
+      ],
+      "scheduled": true,
+      "seq": 5,
+      "tasklet": "sender1"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 6,
+      "runnable": [
+        "main",
+        "actually_first",
+        "actually_second",
+        "sender0",
+        "sender1",
+        "sender2"
+      ],
+      "scheduled": true,
+      "seq": 6,
+      "tasklet": "sender2"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 7,
+      "runnable": [
+        "main",
+        "actually_first",
+        "actually_second",
+        "sender0",
+        "sender1",
+        "sender2",
+        "receiver0"
+      ],
+      "scheduled": true,
+      "seq": 7,
+      "tasklet": "receiver0"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 8,
+      "runnable": [
+        "main",
+        "actually_first",
+        "actually_second",
+        "sender0",
+        "sender1",
+        "sender2",
+        "receiver0",
+        "receiver1"
+      ],
+      "scheduled": true,
+      "seq": 8,
+      "tasklet": "receiver1"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 9,
+      "runnable": [
+        "main",
+        "actually_first",
+        "actually_second",
+        "sender0",
+        "sender1",
+        "sender2",
+        "receiver0",
+        "receiver1",
+        "receiver2"
+      ],
+      "scheduled": true,
+      "seq": 9,
+      "tasklet": "receiver2"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 10,
+      "runnable": [
+        "main",
+        "actually_first",
+        "actually_second",
+        "sender0",
+        "sender1",
+        "sender2",
+        "receiver0",
+        "receiver1",
+        "receiver2",
+        "tail0"
+      ],
+      "scheduled": true,
+      "seq": 10,
+      "tasklet": "tail0"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 11,
+      "runnable": [
+        "main",
+        "actually_first",
+        "actually_second",
+        "sender0",
+        "sender1",
+        "sender2",
+        "receiver0",
+        "receiver1",
+        "receiver2",
+        "tail0",
+        "tail1"
+      ],
+      "scheduled": true,
+      "seq": 11,
+      "tasklet": "tail1"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 12,
+      "runnable": [
+        "main",
+        "actually_first",
+        "actually_second",
+        "sender0",
+        "sender1",
+        "sender2",
+        "receiver0",
+        "receiver1",
+        "receiver2",
+        "tail0",
+        "tail1",
+        "tail2"
+      ],
+      "scheduled": true,
+      "seq": 12,
+      "tasklet": "tail2"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 13
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 14,
+      "to": "actually_first",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "actually_first",
+      "completed": [
+        "actually first"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 15,
+      "target": "completed",
+      "value": "actually first"
+    },
+    {
+      "actor": "actually_first",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 16,
+      "tasklet": "actually_first"
+    },
+    {
+      "actor": "actually_first",
+      "from": "actually_first",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 17,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 18,
+      "to": "actually_second",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "actually_second",
+      "completed": [
+        "actually first",
+        "actually second"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 19,
+      "target": "completed",
+      "value": "actually second"
+    },
+    {
+      "actor": "actually_second",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 20,
+      "tasklet": "actually_second"
+    },
+    {
+      "actor": "actually_second",
+      "from": "actually_second",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 21,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 22,
+      "to": "sender0",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender0",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 10,
+      "runnable": [
+        "main",
+        "sender_between0",
+        "sender1",
+        "sender2",
+        "receiver0",
+        "receiver1",
+        "receiver2",
+        "tail0",
+        "tail1",
+        "tail2"
+      ],
+      "scheduled": true,
+      "seq": 23,
+      "tasklet": "sender_between0"
+    },
+    {
+      "actor": "sender0",
+      "channel": "ch0",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 24,
+      "value": "test",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "sender0",
+      "balance": 1,
+      "blocked_receivers": [],
+      "blocked_senders": [
+        "sender0"
+      ],
+      "channel": "ch0",
+      "direction": "send",
+      "kind": "channel.block",
+      "seq": 25
+    },
+    {
+      "actor": "sender0",
+      "from": "sender0",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 26,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 27,
+      "to": "sender_between0",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender_between0",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 28,
+      "target": "completed",
+      "value": "sender inbetween 0"
+    },
+    {
+      "actor": "sender_between0",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 29,
+      "tasklet": "sender_between0"
+    },
+    {
+      "actor": "sender_between0",
+      "from": "sender_between0",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 30,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 31,
+      "to": "sender1",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender1",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 9,
+      "runnable": [
+        "main",
+        "sender_between1",
+        "sender2",
+        "receiver0",
+        "receiver1",
+        "receiver2",
+        "tail0",
+        "tail1",
+        "tail2"
+      ],
+      "scheduled": true,
+      "seq": 32,
+      "tasklet": "sender_between1"
+    },
+    {
+      "actor": "sender1",
+      "channel": "ch0",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 33,
+      "value": "test",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "sender1",
+      "balance": 2,
+      "blocked_receivers": [],
+      "blocked_senders": [
+        "sender0",
+        "sender1"
+      ],
+      "channel": "ch0",
+      "direction": "send",
+      "kind": "channel.block",
+      "seq": 34
+    },
+    {
+      "actor": "sender1",
+      "from": "sender1",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 35,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 36,
+      "to": "sender_between1",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender_between1",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 37,
+      "target": "completed",
+      "value": "sender inbetween 1"
+    },
+    {
+      "actor": "sender_between1",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 38,
+      "tasklet": "sender_between1"
+    },
+    {
+      "actor": "sender_between1",
+      "from": "sender_between1",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 39,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 40,
+      "to": "sender2",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender2",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 8,
+      "runnable": [
+        "main",
+        "sender_between2",
+        "receiver0",
+        "receiver1",
+        "receiver2",
+        "tail0",
+        "tail1",
+        "tail2"
+      ],
+      "scheduled": true,
+      "seq": 41,
+      "tasklet": "sender_between2"
+    },
+    {
+      "actor": "sender2",
+      "channel": "ch0",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 42,
+      "value": "test",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "sender2",
+      "balance": 3,
+      "blocked_receivers": [],
+      "blocked_senders": [
+        "sender0",
+        "sender1",
+        "sender2"
+      ],
+      "channel": "ch0",
+      "direction": "send",
+      "kind": "channel.block",
+      "seq": 43
+    },
+    {
+      "actor": "sender2",
+      "from": "sender2",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 44,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 45,
+      "to": "sender_between2",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender_between2",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 46,
+      "target": "completed",
+      "value": "sender inbetween 2"
+    },
+    {
+      "actor": "sender_between2",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 47,
+      "tasklet": "sender_between2"
+    },
+    {
+      "actor": "sender_between2",
+      "from": "sender_between2",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 48,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 49,
+      "to": "receiver0",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver0",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 7,
+      "runnable": [
+        "main",
+        "receiver_between0",
+        "receiver1",
+        "receiver2",
+        "tail0",
+        "tail1",
+        "tail2"
+      ],
+      "scheduled": true,
+      "seq": 50,
+      "tasklet": "receiver_between0"
+    },
+    {
+      "actor": "receiver0",
+      "channel": "ch0",
+      "kind": "channel.receive.attempt",
+      "seq": 51,
+      "waiting_senders": [
+        "sender0",
+        "sender1",
+        "sender2"
+      ]
+    },
+    {
+      "actor": "sender0",
+      "balance": 2,
+      "channel": "ch0",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": 0,
+      "preferred_continuation": "receiver0",
+      "receiver": "receiver0",
+      "sender": "sender0",
+      "seq": 52,
+      "value": "test"
+    },
+    {
+      "actor": "receiver0",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ]
+      ],
+      "kind": "tasklet.observed",
+      "seq": 53,
+      "target": "completed",
+      "value": [
+        "receiver",
+        0
+      ]
+    },
+    {
+      "actor": "receiver0",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 54,
+      "tasklet": "receiver0"
+    },
+    {
+      "actor": "receiver0",
+      "from": "receiver0",
+      "kind": "scheduler.switch",
+      "reason": "resume_channel_sender",
+      "seq": 55,
+      "to": "sender0",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "sender0",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ]
+      ],
+      "kind": "tasklet.observed",
+      "seq": 56,
+      "target": "completed",
+      "value": [
+        "sender",
+        0
+      ]
+    },
+    {
+      "actor": "sender0",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 57,
+      "tasklet": "sender0"
+    },
+    {
+      "actor": "sender0",
+      "from": "sender0",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 58,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 59,
+      "to": "receiver_between0",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver_between0",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ],
+        "receiver inbetween 0"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 60,
+      "target": "completed",
+      "value": "receiver inbetween 0"
+    },
+    {
+      "actor": "receiver_between0",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 61,
+      "tasklet": "receiver_between0"
+    },
+    {
+      "actor": "receiver_between0",
+      "from": "receiver_between0",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 62,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 63,
+      "to": "receiver1",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver1",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 6,
+      "runnable": [
+        "main",
+        "receiver_between1",
+        "receiver2",
+        "tail0",
+        "tail1",
+        "tail2"
+      ],
+      "scheduled": true,
+      "seq": 64,
+      "tasklet": "receiver_between1"
+    },
+    {
+      "actor": "receiver1",
+      "channel": "ch0",
+      "kind": "channel.receive.attempt",
+      "seq": 65,
+      "waiting_senders": [
+        "sender1",
+        "sender2"
+      ]
+    },
+    {
+      "actor": "sender1",
+      "balance": 1,
+      "channel": "ch0",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": 0,
+      "preferred_continuation": "receiver1",
+      "receiver": "receiver1",
+      "sender": "sender1",
+      "seq": 66,
+      "value": "test"
+    },
+    {
+      "actor": "receiver1",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ],
+        "receiver inbetween 0",
+        [
+          "receiver",
+          1
+        ]
+      ],
+      "kind": "tasklet.observed",
+      "seq": 67,
+      "target": "completed",
+      "value": [
+        "receiver",
+        1
+      ]
+    },
+    {
+      "actor": "receiver1",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 68,
+      "tasklet": "receiver1"
+    },
+    {
+      "actor": "receiver1",
+      "from": "receiver1",
+      "kind": "scheduler.switch",
+      "reason": "resume_channel_sender",
+      "seq": 69,
+      "to": "sender1",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "sender1",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ],
+        "receiver inbetween 0",
+        [
+          "receiver",
+          1
+        ],
+        [
+          "sender",
+          1
+        ]
+      ],
+      "kind": "tasklet.observed",
+      "seq": 70,
+      "target": "completed",
+      "value": [
+        "sender",
+        1
+      ]
+    },
+    {
+      "actor": "sender1",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 71,
+      "tasklet": "sender1"
+    },
+    {
+      "actor": "sender1",
+      "from": "sender1",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 72,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 73,
+      "to": "receiver_between1",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver_between1",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ],
+        "receiver inbetween 0",
+        [
+          "receiver",
+          1
+        ],
+        [
+          "sender",
+          1
+        ],
+        "receiver inbetween 1"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 74,
+      "target": "completed",
+      "value": "receiver inbetween 1"
+    },
+    {
+      "actor": "receiver_between1",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 75,
+      "tasklet": "receiver_between1"
+    },
+    {
+      "actor": "receiver_between1",
+      "from": "receiver_between1",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 76,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 77,
+      "to": "receiver2",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver2",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 5,
+      "runnable": [
+        "main",
+        "receiver_between2",
+        "tail0",
+        "tail1",
+        "tail2"
+      ],
+      "scheduled": true,
+      "seq": 78,
+      "tasklet": "receiver_between2"
+    },
+    {
+      "actor": "receiver2",
+      "channel": "ch0",
+      "kind": "channel.receive.attempt",
+      "seq": 79,
+      "waiting_senders": [
+        "sender2"
+      ]
+    },
+    {
+      "actor": "sender2",
+      "balance": 0,
+      "channel": "ch0",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": 0,
+      "preferred_continuation": "receiver2",
+      "receiver": "receiver2",
+      "sender": "sender2",
+      "seq": 80,
+      "value": "test"
+    },
+    {
+      "actor": "receiver2",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ],
+        "receiver inbetween 0",
+        [
+          "receiver",
+          1
+        ],
+        [
+          "sender",
+          1
+        ],
+        "receiver inbetween 1",
+        [
+          "receiver",
+          2
+        ]
+      ],
+      "kind": "tasklet.observed",
+      "seq": 81,
+      "target": "completed",
+      "value": [
+        "receiver",
+        2
+      ]
+    },
+    {
+      "actor": "receiver2",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 82,
+      "tasklet": "receiver2"
+    },
+    {
+      "actor": "receiver2",
+      "from": "receiver2",
+      "kind": "scheduler.switch",
+      "reason": "resume_channel_sender",
+      "seq": 83,
+      "to": "sender2",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "sender2",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ],
+        "receiver inbetween 0",
+        [
+          "receiver",
+          1
+        ],
+        [
+          "sender",
+          1
+        ],
+        "receiver inbetween 1",
+        [
+          "receiver",
+          2
+        ],
+        [
+          "sender",
+          2
+        ]
+      ],
+      "kind": "tasklet.observed",
+      "seq": 84,
+      "target": "completed",
+      "value": [
+        "sender",
+        2
+      ]
+    },
+    {
+      "actor": "sender2",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 85,
+      "tasklet": "sender2"
+    },
+    {
+      "actor": "sender2",
+      "from": "sender2",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 86,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 87,
+      "to": "receiver_between2",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver_between2",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ],
+        "receiver inbetween 0",
+        [
+          "receiver",
+          1
+        ],
+        [
+          "sender",
+          1
+        ],
+        "receiver inbetween 1",
+        [
+          "receiver",
+          2
+        ],
+        [
+          "sender",
+          2
+        ],
+        "receiver inbetween 2"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 88,
+      "target": "completed",
+      "value": "receiver inbetween 2"
+    },
+    {
+      "actor": "receiver_between2",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 89,
+      "tasklet": "receiver_between2"
+    },
+    {
+      "actor": "receiver_between2",
+      "from": "receiver_between2",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 90,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 91,
+      "to": "tail0",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "tail0",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ],
+        "receiver inbetween 0",
+        [
+          "receiver",
+          1
+        ],
+        [
+          "sender",
+          1
+        ],
+        "receiver inbetween 1",
+        [
+          "receiver",
+          2
+        ],
+        [
+          "sender",
+          2
+        ],
+        "receiver inbetween 2",
+        "tail0"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 92,
+      "target": "completed",
+      "value": "tail0"
+    },
+    {
+      "actor": "tail0",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 93,
+      "tasklet": "tail0"
+    },
+    {
+      "actor": "tail0",
+      "from": "tail0",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 94,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 95,
+      "to": "tail1",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "tail1",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ],
+        "receiver inbetween 0",
+        [
+          "receiver",
+          1
+        ],
+        [
+          "sender",
+          1
+        ],
+        "receiver inbetween 1",
+        [
+          "receiver",
+          2
+        ],
+        [
+          "sender",
+          2
+        ],
+        "receiver inbetween 2",
+        "tail0",
+        "tail1"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 96,
+      "target": "completed",
+      "value": "tail1"
+    },
+    {
+      "actor": "tail1",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 97,
+      "tasklet": "tail1"
+    },
+    {
+      "actor": "tail1",
+      "from": "tail1",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 98,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 99,
+      "to": "tail2",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "tail2",
+      "completed": [
+        "actually first",
+        "actually second",
+        "sender inbetween 0",
+        "sender inbetween 1",
+        "sender inbetween 2",
+        [
+          "receiver",
+          0
+        ],
+        [
+          "sender",
+          0
+        ],
+        "receiver inbetween 0",
+        [
+          "receiver",
+          1
+        ],
+        [
+          "sender",
+          1
+        ],
+        "receiver inbetween 1",
+        [
+          "receiver",
+          2
+        ],
+        [
+          "sender",
+          2
+        ],
+        "receiver inbetween 2",
+        "tail0",
+        "tail1",
+        "tail2"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 100,
+      "target": "completed",
+      "value": "tail2"
+    },
+    {
+      "actor": "tail2",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 101,
+      "tasklet": "tail2"
+    },
+    {
+      "actor": "tail2",
+      "from": "tail2",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 102,
+      "to": "main"
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "channels": {
+      "ch0": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    },
+    "completed": [
+      "actually first",
+      "actually second",
+      "sender inbetween 0",
+      "sender inbetween 1",
+      "sender inbetween 2",
+      [
+        "receiver",
+        0
+      ],
+      [
+        "sender",
+        0
+      ],
+      "receiver inbetween 0",
+      [
+        "receiver",
+        1
+      ],
+      [
+        "sender",
+        1
+      ],
+      "receiver inbetween 1",
+      [
+        "receiver",
+        2
+      ],
+      [
+        "sender",
+        2
+      ],
+      "receiver inbetween 2",
+      "tail0",
+      "tail1",
+      "tail2"
+    ]
+  }
+}

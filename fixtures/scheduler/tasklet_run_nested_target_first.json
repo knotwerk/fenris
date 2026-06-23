@@ -1,0 +1,77 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "tasklet_run_nested_target_first",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_scheduler.py::TestTaskletRunOrderBase::test_tasklet_run_order"
+    ]
+  },
+  "scenario": {
+    "nested_tasklets": true,
+    "tasklets": [
+      {
+        "id": "t1",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "t1"
+          }
+        ]
+      },
+      {
+        "id": "t2",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "t2"
+          }
+        ]
+      },
+      {
+        "id": "t3",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "t3"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "run_tasklet",
+      "tasklet": "t1"
+    }
+  },
+  "events": [
+    { "seq": 0, "kind": "scheduler.start", "actor": "main" },
+    { "seq": 1, "kind": "tasklet.new", "tasklet": "t1" },
+    { "seq": 2, "kind": "tasklet.new", "tasklet": "t2" },
+    { "seq": 3, "kind": "tasklet.new", "tasklet": "t3" },
+    { "seq": 4, "kind": "scheduler.switch", "from": "main", "to": "t1", "reason": "run_tasklet" },
+    { "seq": 5, "kind": "tasklet.observed", "actor": "t1", "completed": ["t1"] },
+    { "seq": 6, "kind": "tasklet.complete", "tasklet": "t1" },
+    { "seq": 7, "kind": "scheduler.switch", "from": "t1", "to": "main", "reason": "tasklet_complete" },
+    { "seq": 8, "kind": "scheduler.switch", "from": "main", "to": "t2", "reason": "nested_next_runnable" },
+    { "seq": 9, "kind": "tasklet.observed", "actor": "t2", "completed": ["t1", "t2"] },
+    { "seq": 10, "kind": "tasklet.complete", "tasklet": "t2" },
+    { "seq": 11, "kind": "scheduler.switch", "from": "t2", "to": "main", "reason": "tasklet_complete" },
+    { "seq": 12, "kind": "scheduler.switch", "from": "main", "to": "t3", "reason": "nested_next_runnable" },
+    { "seq": 13, "kind": "tasklet.observed", "actor": "t3", "completed": ["t1", "t2", "t3"] },
+    { "seq": 14, "kind": "tasklet.complete", "tasklet": "t3" },
+    { "seq": 15, "kind": "scheduler.switch", "from": "t3", "to": "main", "reason": "run_complete" }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": ["t1", "t2", "t3"],
+    "tasklets": {
+      "t1": { "alive": false, "scheduled": false },
+      "t2": { "alive": false, "scheduled": false },
+      "t3": { "alive": false, "scheduled": false }
+    }
+  }
+}

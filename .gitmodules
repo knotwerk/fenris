@@ -1,0 +1,24 @@
+[submodule "carbonengine/core"]
+	path = carbonengine/core
+	url = https://github.com/carbonengine/core.git
+	ignore = dirty
+[submodule "carbonengine/io"]
+	path = carbonengine/io
+	url = https://github.com/carbonengine/io.git
+	ignore = dirty
+[submodule "carbonengine/resources"]
+	path = carbonengine/resources
+	url = https://github.com/carbonengine/resources.git
+	ignore = dirty
+[submodule "carbonengine/scheduler"]
+	path = carbonengine/scheduler
+	url = https://github.com/carbonengine/scheduler.git
+	ignore = dirty
+[submodule "carbonengine/vcpkg-registry"]
+	path = carbonengine/vcpkg-registry
+	url = https://github.com/carbonengine/vcpkg-registry.git
+	ignore = dirty
+[submodule "carbon-scheduler-rs"]
+	path = carbon-scheduler-rs
+	url = https://github.com/knotwerk/carbon-scheduler-rs.git
+	ignore = dirty

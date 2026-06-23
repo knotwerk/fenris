@@ -1,0 +1,18 @@
+[package]
+name = "carbon-scheduler-python"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+carbon-scheduler-core = { path = "../carbon-scheduler-core" }
+carbon-scheduler-ffi = { path = "../carbon-scheduler-ffi" }
+pyo3 = { version = "0.21.2", features = ["auto-initialize"] }

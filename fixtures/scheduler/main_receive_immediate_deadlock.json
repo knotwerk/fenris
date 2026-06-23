@@ -1,0 +1,86 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "main_receive_immediate_deadlock",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_main_tasklet_blocking_without_a_sender"
+    ]
+  },
+  "scenario": {
+    "channels": [
+      {
+        "id": "ch0",
+        "preference": -1
+      }
+    ],
+    "tasklets": [],
+    "entrypoint": {
+      "op": "receive",
+      "actor": "main",
+      "channel": "ch0"
+    }
+  },
+  "events": [
+    {
+      "seq": 0,
+      "kind": "scheduler.start",
+      "actor": "main",
+      "current": "main",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ]
+    },
+    {
+      "seq": 1,
+      "kind": "channel.new",
+      "actor": "main",
+      "channel": "ch0",
+      "preference": -1,
+      "balance": 0
+    },
+    {
+      "seq": 2,
+      "kind": "tasklet.batch_new",
+      "actor": "main",
+      "tasklets": [],
+      "run_count": 1
+    },
+    {
+      "seq": 3,
+      "kind": "channel.receive.attempt",
+      "actor": "main",
+      "channel": "ch0",
+      "waiting_senders": []
+    },
+    {
+      "seq": 4,
+      "kind": "scheduler.deadlock",
+      "actor": "main",
+      "operation": "receive",
+      "channel": "ch0",
+      "balance": 0,
+      "main_blocked": false,
+      "error": {
+        "type": "RuntimeError",
+        "message_contains": "Deadlock"
+      }
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "error": {
+      "type": "RuntimeError",
+      "message_contains": "Deadlock"
+    },
+    "channels": {
+      "ch0": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

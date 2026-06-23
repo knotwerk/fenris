@@ -1,0 +1,133 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_preference_sender",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_preference_sender"
+    ]
+  },
+  "scenario": {
+    "channels": [{ "id": "ch0", "preference": 1 }],
+    "tasklets": [
+      {
+        "id": "sender0",
+        "body": [
+          { "op": "send", "channel": "ch0", "value": "test" },
+          { "op": "append", "target": "completed", "value": ["sender", 0] }
+        ]
+      },
+      {
+        "id": "sender1",
+        "body": [
+          { "op": "send", "channel": "ch0", "value": "test" },
+          { "op": "append", "target": "completed", "value": ["sender", 1] }
+        ]
+      },
+      {
+        "id": "sender2",
+        "body": [
+          { "op": "send", "channel": "ch0", "value": "test" },
+          { "op": "append", "target": "completed", "value": ["sender", 2] }
+        ]
+      },
+      {
+        "id": "receiver0",
+        "body": [
+          { "op": "receive", "channel": "ch0", "bind": "received" },
+          { "op": "append", "target": "completed", "value": ["receiver", 0] }
+        ]
+      },
+      {
+        "id": "receiver1",
+        "body": [
+          { "op": "receive", "channel": "ch0", "bind": "received" },
+          { "op": "append", "target": "completed", "value": ["receiver", 1] }
+        ]
+      },
+      {
+        "id": "receiver2",
+        "body": [
+          { "op": "receive", "channel": "ch0", "bind": "received" },
+          { "op": "append", "target": "completed", "value": ["receiver", 2] }
+        ]
+      }
+    ],
+    "entrypoint": { "op": "run_scheduler" }
+  },
+  "events": [
+    {"seq":0,"kind":"scheduler.start","actor":"main","current":"main","run_count":1,"runnable":["main"]},
+    {"seq":1,"kind":"channel.new","actor":"main","channel":"ch0","preference":1,"balance":0},
+    {"seq":2,"kind":"tasklet.new","actor":"main","tasklet":"sender0","alive":true,"scheduled":true,"run_count":2,"runnable":["main","sender0"]},
+    {"seq":3,"kind":"tasklet.new","actor":"main","tasklet":"sender1","alive":true,"scheduled":true,"run_count":3,"runnable":["main","sender0","sender1"]},
+    {"seq":4,"kind":"tasklet.new","actor":"main","tasklet":"sender2","alive":true,"scheduled":true,"run_count":4,"runnable":["main","sender0","sender1","sender2"]},
+    {"seq":5,"kind":"tasklet.new","actor":"main","tasklet":"receiver0","alive":true,"scheduled":true,"run_count":5,"runnable":["main","sender0","sender1","sender2","receiver0"]},
+    {"seq":6,"kind":"tasklet.new","actor":"main","tasklet":"receiver1","alive":true,"scheduled":true,"run_count":6,"runnable":["main","sender0","sender1","sender2","receiver0","receiver1"]},
+    {"seq":7,"kind":"tasklet.new","actor":"main","tasklet":"receiver2","alive":true,"scheduled":true,"run_count":7,"runnable":["main","sender0","sender1","sender2","receiver0","receiver1","receiver2"]},
+    {"seq":8,"kind":"scheduler.run.start","actor":"main","limit":"until_idle"},
+    {"seq":9,"kind":"scheduler.switch","actor":"main","from":"main","to":"sender0","reason":"next_runnable"},
+    {"seq":10,"kind":"channel.send.attempt","actor":"sender0","channel":"ch0","value":"test","waiting_receivers":[]},
+    {"seq":11,"kind":"channel.block","actor":"sender0","channel":"ch0","direction":"send","balance":1,"blocked_senders":["sender0"],"blocked_receivers":[]},
+    {"seq":12,"kind":"scheduler.switch","actor":"sender0","from":"sender0","to":"main","reason":"blocked"},
+    {"seq":13,"kind":"scheduler.switch","actor":"main","from":"main","to":"sender1","reason":"next_runnable"},
+    {"seq":14,"kind":"channel.send.attempt","actor":"sender1","channel":"ch0","value":"test","waiting_receivers":[]},
+    {"seq":15,"kind":"channel.block","actor":"sender1","channel":"ch0","direction":"send","balance":2,"blocked_senders":["sender0","sender1"],"blocked_receivers":[]},
+    {"seq":16,"kind":"scheduler.switch","actor":"sender1","from":"sender1","to":"main","reason":"blocked"},
+    {"seq":17,"kind":"scheduler.switch","actor":"main","from":"main","to":"sender2","reason":"next_runnable"},
+    {"seq":18,"kind":"channel.send.attempt","actor":"sender2","channel":"ch0","value":"test","waiting_receivers":[]},
+    {"seq":19,"kind":"channel.block","actor":"sender2","channel":"ch0","direction":"send","balance":3,"blocked_senders":["sender0","sender1","sender2"],"blocked_receivers":[]},
+    {"seq":20,"kind":"scheduler.switch","actor":"sender2","from":"sender2","to":"main","reason":"blocked"},
+    {"seq":21,"kind":"scheduler.switch","actor":"main","from":"main","to":"receiver0","reason":"next_runnable"},
+    {"seq":22,"kind":"channel.receive.attempt","actor":"receiver0","channel":"ch0","waiting_senders":["sender0","sender1","sender2"]},
+    {"seq":23,"kind":"channel.transfer","actor":"sender0","channel":"ch0","sender":"sender0","receiver":"receiver0","value":"test","preference":1,"preferred_continuation":"sender0","balance":2},
+    {"seq":24,"kind":"scheduler.switch","actor":"receiver0","from":"receiver0","to":"sender0","reason":"channel_preference_sender"},
+    {"seq":25,"kind":"tasklet.observed","actor":"sender0","target":"completed","value":["sender",0],"completed":[["sender",0]]},
+    {"seq":26,"kind":"tasklet.complete","actor":"sender0","tasklet":"sender0","alive":false},
+    {"seq":27,"kind":"scheduler.switch","actor":"sender0","from":"sender0","to":"main","reason":"tasklet_complete"},
+    {"seq":28,"kind":"scheduler.switch","actor":"main","from":"main","to":"receiver1","reason":"next_runnable"},
+    {"seq":29,"kind":"channel.receive.attempt","actor":"receiver1","channel":"ch0","waiting_senders":["sender1","sender2"]},
+    {"seq":30,"kind":"channel.transfer","actor":"sender1","channel":"ch0","sender":"sender1","receiver":"receiver1","value":"test","preference":1,"preferred_continuation":"sender1","balance":1},
+    {"seq":31,"kind":"scheduler.switch","actor":"receiver1","from":"receiver1","to":"sender1","reason":"channel_preference_sender"},
+    {"seq":32,"kind":"tasklet.observed","actor":"sender1","target":"completed","value":["sender",1],"completed":[["sender",0],["sender",1]]},
+    {"seq":33,"kind":"tasklet.complete","actor":"sender1","tasklet":"sender1","alive":false},
+    {"seq":34,"kind":"scheduler.switch","actor":"sender1","from":"sender1","to":"main","reason":"tasklet_complete"},
+    {"seq":35,"kind":"scheduler.switch","actor":"main","from":"main","to":"receiver2","reason":"next_runnable"},
+    {"seq":36,"kind":"channel.receive.attempt","actor":"receiver2","channel":"ch0","waiting_senders":["sender2"]},
+    {"seq":37,"kind":"channel.transfer","actor":"sender2","channel":"ch0","sender":"sender2","receiver":"receiver2","value":"test","preference":1,"preferred_continuation":"sender2","balance":0},
+    {"seq":38,"kind":"scheduler.switch","actor":"receiver2","from":"receiver2","to":"sender2","reason":"channel_preference_sender"},
+    {"seq":39,"kind":"tasklet.observed","actor":"sender2","target":"completed","value":["sender",2],"completed":[["sender",0],["sender",1],["sender",2]]},
+    {"seq":40,"kind":"tasklet.complete","actor":"sender2","tasklet":"sender2","alive":false},
+    {"seq":41,"kind":"scheduler.switch","actor":"sender2","from":"sender2","to":"main","reason":"tasklet_complete"},
+    {"seq":42,"kind":"scheduler.switch","actor":"main","from":"main","to":"receiver0","reason":"next_runnable"},
+    {"seq":43,"kind":"tasklet.observed","actor":"receiver0","target":"completed","value":["receiver",0],"completed":[["sender",0],["sender",1],["sender",2],["receiver",0]]},
+    {"seq":44,"kind":"tasklet.complete","actor":"receiver0","tasklet":"receiver0","alive":false},
+    {"seq":45,"kind":"scheduler.switch","actor":"receiver0","from":"receiver0","to":"main","reason":"tasklet_complete"},
+    {"seq":46,"kind":"scheduler.switch","actor":"main","from":"main","to":"receiver1","reason":"next_runnable"},
+    {"seq":47,"kind":"tasklet.observed","actor":"receiver1","target":"completed","value":["receiver",1],"completed":[["sender",0],["sender",1],["sender",2],["receiver",0],["receiver",1]]},
+    {"seq":48,"kind":"tasklet.complete","actor":"receiver1","tasklet":"receiver1","alive":false},
+    {"seq":49,"kind":"scheduler.switch","actor":"receiver1","from":"receiver1","to":"main","reason":"tasklet_complete"},
+    {"seq":50,"kind":"scheduler.switch","actor":"main","from":"main","to":"receiver2","reason":"next_runnable"},
+    {"seq":51,"kind":"tasklet.observed","actor":"receiver2","target":"completed","value":["receiver",2],"completed":[["sender",0],["sender",1],["sender",2],["receiver",0],["receiver",1],["receiver",2]]},
+    {"seq":52,"kind":"tasklet.complete","actor":"receiver2","tasklet":"receiver2","alive":false},
+    {"seq":53,"kind":"scheduler.switch","actor":"receiver2","from":"receiver2","to":"main","reason":"run_complete"}
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": [
+      ["sender", 0],
+      ["sender", 1],
+      ["sender", 2],
+      ["receiver", 0],
+      ["receiver", 1],
+      ["receiver", 2]
+    ],
+    "channels": {
+      "ch0": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

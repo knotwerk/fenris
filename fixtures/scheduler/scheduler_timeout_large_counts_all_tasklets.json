@@ -1,0 +1,241 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "scheduler_timeout_large_counts_all_tasklets",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/capiTest/Scheduler.cpp::PyScheduler_GetTaskletsCompletedLastRunWithTimeout",
+      "tests/capiTest/Scheduler.cpp::PyScheduler_GetTaskletsSwitchedLastRunWithTimeout"
+    ]
+  },
+  "scenario": {
+    "tasklets": [
+      {
+        "id": "first",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "first"
+          }
+        ]
+      },
+      {
+        "id": "second",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "second"
+          }
+        ]
+      },
+      {
+        "id": "third",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "third"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "run_scheduler_with_timeout",
+      "timeout_ns": 1000000000
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "first"
+      ],
+      "scheduled": true,
+      "seq": 1,
+      "tasklet": "first"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "first",
+        "second"
+      ],
+      "scheduled": true,
+      "seq": 2,
+      "tasklet": "second"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 4,
+      "runnable": [
+        "main",
+        "first",
+        "second",
+        "third"
+      ],
+      "scheduled": true,
+      "seq": 3,
+      "tasklet": "third"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": {
+        "timeout_ns": 1000000000
+      },
+      "seq": 4
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 5,
+      "to": "first",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "first",
+      "completed": [
+        "first"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 6,
+      "target": "completed",
+      "value": "first"
+    },
+    {
+      "actor": "first",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 7,
+      "tasklet": "first"
+    },
+    {
+      "actor": "first",
+      "from": "first",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 8,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 9,
+      "to": "second",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "second",
+      "completed": [
+        "first",
+        "second"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 10,
+      "target": "completed",
+      "value": "second"
+    },
+    {
+      "actor": "second",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 11,
+      "tasklet": "second"
+    },
+    {
+      "actor": "second",
+      "from": "second",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 12,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 13,
+      "to": "third",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "third",
+      "completed": [
+        "first",
+        "second",
+        "third"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 14,
+      "target": "completed",
+      "value": "third"
+    },
+    {
+      "actor": "third",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 15,
+      "tasklet": "third"
+    },
+    {
+      "actor": "third",
+      "from": "third",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 16,
+      "to": "main"
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "last_timeout_completed_tasklets": 3,
+    "last_timeout_switched_tasklets": 6,
+    "completed": [
+      "first",
+      "second",
+      "third"
+    ],
+    "tasklets": {
+      "first": {
+        "alive": false,
+        "scheduled": false
+      },
+      "second": {
+        "alive": false,
+        "scheduled": false
+      },
+      "third": {
+        "alive": false,
+        "scheduled": false
+      }
+    }
+  }
+}

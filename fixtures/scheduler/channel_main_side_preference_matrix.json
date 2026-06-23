@@ -1,0 +1,667 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_main_side_preference_matrix",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_non_blocking_send",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_non_blocking_receive",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_preference_receiver",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_preference_sender"
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "channels": [
+      {
+        "id": "main_send_pref_receiver",
+        "preference": -1
+      },
+      {
+        "id": "main_send_pref_sender",
+        "preference": 1
+      },
+      {
+        "id": "main_receive_pref_sender",
+        "preference": 1
+      },
+      {
+        "id": "main_receive_pref_receiver",
+        "preference": -1
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "receiver_inline",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "main_send_pref_receiver",
+            "bind": "receiver_inline_received"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver_inline_after_main_send"
+          }
+        ]
+      },
+      {
+        "id": "receiver_deferred",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "main_send_pref_sender",
+            "bind": "receiver_deferred_received"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver_deferred_after_main_send"
+          }
+        ]
+      },
+      {
+        "id": "sender_inline",
+        "body": [
+          {
+            "op": "send",
+            "channel": "main_receive_pref_sender",
+            "value": "sender-inline-value"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "sender_inline_after_main_receive"
+          }
+        ]
+      },
+      {
+        "id": "sender_deferred",
+        "body": [
+          {
+            "op": "send",
+            "channel": "main_receive_pref_receiver",
+            "value": "sender-deferred-value"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "sender_deferred_after_main_receive"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "send",
+          "channel": "main_send_pref_receiver",
+          "value": "main-send-inline-value"
+        },
+        {
+          "op": "send",
+          "channel": "main_send_pref_sender",
+          "value": "main-send-deferred-value"
+        },
+        {
+          "op": "receive",
+          "channel": "main_receive_pref_sender",
+          "bind": "main_received"
+        },
+        {
+          "op": "receive",
+          "channel": "main_receive_pref_receiver",
+          "bind": "main_received"
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": [
+      "receiver_inline_after_main_send",
+      "sender_inline_after_main_receive",
+      "receiver_deferred_after_main_send",
+      "sender_deferred_after_main_receive"
+    ],
+    "main_received": [
+      "sender-inline-value",
+      "sender-deferred-value"
+    ],
+    "channels": {
+      "main_send_pref_receiver": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      },
+      "main_send_pref_sender": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      },
+      "main_receive_pref_sender": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      },
+      "main_receive_pref_receiver": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    },
+    "tasklets": {
+      "receiver_inline": {
+        "receiver_inline_received": "main-send-inline-value"
+      },
+      "receiver_deferred": {
+        "receiver_deferred_received": "main-send-deferred-value"
+      }
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "main_send_pref_receiver",
+      "kind": "channel.new",
+      "preference": -1,
+      "seq": 1
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "main_send_pref_sender",
+      "kind": "channel.new",
+      "preference": 1,
+      "seq": 2
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "main_receive_pref_sender",
+      "kind": "channel.new",
+      "preference": 1,
+      "seq": 3
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "main_receive_pref_receiver",
+      "kind": "channel.new",
+      "preference": -1,
+      "seq": 4
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "receiver_inline"
+      ],
+      "scheduled": true,
+      "seq": 5,
+      "tasklet": "receiver_inline"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "receiver_inline",
+        "receiver_deferred"
+      ],
+      "scheduled": true,
+      "seq": 6,
+      "tasklet": "receiver_deferred"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 4,
+      "runnable": [
+        "main",
+        "receiver_inline",
+        "receiver_deferred",
+        "sender_inline"
+      ],
+      "scheduled": true,
+      "seq": 7,
+      "tasklet": "sender_inline"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 5,
+      "runnable": [
+        "main",
+        "receiver_inline",
+        "receiver_deferred",
+        "sender_inline",
+        "sender_deferred"
+      ],
+      "scheduled": true,
+      "seq": 8,
+      "tasklet": "sender_deferred"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 9
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 10,
+      "to": "receiver_inline",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver_inline",
+      "channel": "main_send_pref_receiver",
+      "kind": "channel.receive.attempt",
+      "seq": 11,
+      "waiting_senders": []
+    },
+    {
+      "actor": "receiver_inline",
+      "balance": -1,
+      "blocked_receivers": [
+        "receiver_inline"
+      ],
+      "blocked_senders": [],
+      "channel": "main_send_pref_receiver",
+      "direction": "receive",
+      "kind": "channel.block",
+      "seq": 12
+    },
+    {
+      "actor": "receiver_inline",
+      "from": "receiver_inline",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 13,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 14,
+      "to": "receiver_deferred",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "receiver_deferred",
+      "channel": "main_send_pref_sender",
+      "kind": "channel.receive.attempt",
+      "seq": 15,
+      "waiting_senders": []
+    },
+    {
+      "actor": "receiver_deferred",
+      "balance": -1,
+      "blocked_receivers": [
+        "receiver_deferred"
+      ],
+      "blocked_senders": [],
+      "channel": "main_send_pref_sender",
+      "direction": "receive",
+      "kind": "channel.block",
+      "seq": 16
+    },
+    {
+      "actor": "receiver_deferred",
+      "from": "receiver_deferred",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 17,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 18,
+      "to": "sender_inline",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender_inline",
+      "channel": "main_receive_pref_sender",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 19,
+      "value": "sender-inline-value",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "sender_inline",
+      "balance": 1,
+      "blocked_receivers": [],
+      "blocked_senders": [
+        "sender_inline"
+      ],
+      "channel": "main_receive_pref_sender",
+      "direction": "send",
+      "kind": "channel.block",
+      "seq": 20
+    },
+    {
+      "actor": "sender_inline",
+      "from": "sender_inline",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 21,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 22,
+      "to": "sender_deferred",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "sender_deferred",
+      "channel": "main_receive_pref_receiver",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 23,
+      "value": "sender-deferred-value",
+      "waiting_receivers": []
+    },
+    {
+      "actor": "sender_deferred",
+      "balance": 1,
+      "blocked_receivers": [],
+      "blocked_senders": [
+        "sender_deferred"
+      ],
+      "channel": "main_receive_pref_receiver",
+      "direction": "send",
+      "kind": "channel.block",
+      "seq": 24
+    },
+    {
+      "actor": "sender_deferred",
+      "from": "sender_deferred",
+      "kind": "scheduler.switch",
+      "reason": "blocked",
+      "seq": 25,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "channel": "main_send_pref_receiver",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 26,
+      "value": "main-send-inline-value",
+      "waiting_receivers": [
+        "receiver_inline"
+      ]
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "main_send_pref_receiver",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": -1,
+      "preferred_continuation": "receiver_inline",
+      "receiver": "receiver_inline",
+      "sender": "main",
+      "seq": 27,
+      "value": "main-send-inline-value"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "channel_preference_receiver",
+      "seq": 28,
+      "to": "receiver_inline",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "receiver_inline",
+      "completed": [
+        "receiver_inline_after_main_send"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 29,
+      "target": "completed",
+      "value": "receiver_inline_after_main_send"
+    },
+    {
+      "actor": "receiver_inline",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 30,
+      "tasklet": "receiver_inline"
+    },
+    {
+      "actor": "receiver_inline",
+      "from": "receiver_inline",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 31,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "channel": "main_send_pref_sender",
+      "kind": "channel.send.attempt",
+      "payload_kind": "value",
+      "seq": 32,
+      "value": "main-send-deferred-value",
+      "waiting_receivers": [
+        "receiver_deferred"
+      ]
+    },
+    {
+      "actor": "main",
+      "balance": 0,
+      "channel": "main_send_pref_sender",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": 1,
+      "preferred_continuation": "main",
+      "receiver": "receiver_deferred",
+      "sender": "main",
+      "seq": 33,
+      "value": "main-send-deferred-value"
+    },
+    {
+      "actor": "main",
+      "channel": "main_receive_pref_sender",
+      "kind": "channel.receive.attempt",
+      "seq": 34,
+      "waiting_senders": [
+        "sender_inline"
+      ]
+    },
+    {
+      "actor": "sender_inline",
+      "balance": 0,
+      "channel": "main_receive_pref_sender",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": 1,
+      "preferred_continuation": "sender_inline",
+      "receiver": "main",
+      "sender": "sender_inline",
+      "seq": 35,
+      "value": "sender-inline-value"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "channel_preference_sender",
+      "seq": 36,
+      "to": "sender_inline",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "sender_inline",
+      "completed": [
+        "receiver_inline_after_main_send",
+        "sender_inline_after_main_receive"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 37,
+      "target": "completed",
+      "value": "sender_inline_after_main_receive"
+    },
+    {
+      "actor": "sender_inline",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 38,
+      "tasklet": "sender_inline"
+    },
+    {
+      "actor": "sender_inline",
+      "from": "sender_inline",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 39,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "channel": "main_receive_pref_receiver",
+      "kind": "channel.receive.attempt",
+      "seq": 40,
+      "waiting_senders": [
+        "sender_deferred"
+      ]
+    },
+    {
+      "actor": "sender_deferred",
+      "balance": 0,
+      "channel": "main_receive_pref_receiver",
+      "kind": "channel.transfer",
+      "payload_kind": "value",
+      "preference": -1,
+      "preferred_continuation": "main",
+      "receiver": "main",
+      "sender": "sender_deferred",
+      "seq": 41,
+      "value": "sender-deferred-value"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 42
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 43,
+      "to": "receiver_deferred",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "receiver_deferred",
+      "completed": [
+        "receiver_inline_after_main_send",
+        "sender_inline_after_main_receive",
+        "receiver_deferred_after_main_send"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 44,
+      "target": "completed",
+      "value": "receiver_deferred_after_main_send"
+    },
+    {
+      "actor": "receiver_deferred",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 45,
+      "tasklet": "receiver_deferred"
+    },
+    {
+      "actor": "receiver_deferred",
+      "from": "receiver_deferred",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 46,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 47,
+      "to": "sender_deferred",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "sender_deferred",
+      "completed": [
+        "receiver_inline_after_main_send",
+        "sender_inline_after_main_receive",
+        "receiver_deferred_after_main_send",
+        "sender_deferred_after_main_receive"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 48,
+      "target": "completed",
+      "value": "sender_deferred_after_main_receive"
+    },
+    {
+      "actor": "sender_deferred",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 49,
+      "tasklet": "sender_deferred"
+    },
+    {
+      "actor": "sender_deferred",
+      "from": "sender_deferred",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 50,
+      "to": "main"
+    }
+  ]
+}

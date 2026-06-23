@@ -1,0 +1,254 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "schedule_remove_reinsert_paused_tasklet",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_scheduler.py::TestScheduler::test_schedule_remove_fail",
+      "tests/python/scheduler/tests/test_tasklet.py::TestTasklets::test_paused",
+      "carbonengine/scheduler/src/SchedulerModule.cpp::SchedulerScheduleRemove",
+      "carbonengine/scheduler/src/ScheduleManager.cpp::Schedule"
+    ],
+    "legacy_behavior": [
+      "scheduler.schedule_remove yields the current tasklet without rescheduling it.",
+      "A removed tasklet remains alive and paused until another tasklet inserts it.",
+      "A reinserted paused tasklet resumes after scheduler.schedule_remove."
+    ]
+  },
+  "check_events": true,
+  "scenario": {
+    "tasklets": [
+      {
+        "id": "pauser",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "before"
+          },
+          {
+            "op": "schedule_remove"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "after"
+          }
+        ]
+      },
+      {
+        "id": "resumer",
+        "body": [
+          {
+            "op": "insert_tasklet",
+            "tasklet": "pauser"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "resumer"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "run_scheduler"
+    }
+  },
+  "events": [
+    {
+      "actor": "main",
+      "current": "main",
+      "kind": "scheduler.start",
+      "run_count": 1,
+      "runnable": [
+        "main"
+      ],
+      "seq": 0
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "pauser"
+      ],
+      "scheduled": true,
+      "seq": 1,
+      "tasklet": "pauser"
+    },
+    {
+      "actor": "main",
+      "alive": true,
+      "kind": "tasklet.new",
+      "run_count": 3,
+      "runnable": [
+        "main",
+        "pauser",
+        "resumer"
+      ],
+      "scheduled": true,
+      "seq": 2,
+      "tasklet": "resumer"
+    },
+    {
+      "actor": "main",
+      "kind": "scheduler.run.start",
+      "limit": "until_idle",
+      "seq": 3
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 4,
+      "to": "pauser",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "pauser",
+      "completed": [
+        "before"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 5,
+      "target": "completed",
+      "value": "before"
+    },
+    {
+      "actor": "pauser",
+      "alive": true,
+      "kind": "scheduler.schedule_remove",
+      "paused": true,
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "resumer"
+      ],
+      "scheduled": false,
+      "seq": 6,
+      "tasklet": "pauser"
+    },
+    {
+      "actor": "pauser",
+      "from": "pauser",
+      "kind": "scheduler.switch",
+      "reason": "schedule_remove",
+      "seq": 7,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 8,
+      "to": "resumer",
+      "to_times_switched_to": 1
+    },
+    {
+      "actor": "resumer",
+      "alive": true,
+      "kind": "tasklet.insert",
+      "paused": false,
+      "run_count": 2,
+      "runnable": [
+        "main",
+        "pauser"
+      ],
+      "scheduled": true,
+      "seq": 9,
+      "tasklet": "pauser"
+    },
+    {
+      "actor": "resumer",
+      "completed": [
+        "before",
+        "resumer"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 10,
+      "target": "completed",
+      "value": "resumer"
+    },
+    {
+      "actor": "resumer",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 11,
+      "tasklet": "resumer"
+    },
+    {
+      "actor": "resumer",
+      "from": "resumer",
+      "kind": "scheduler.switch",
+      "reason": "tasklet_complete",
+      "seq": 12,
+      "to": "main"
+    },
+    {
+      "actor": "main",
+      "from": "main",
+      "kind": "scheduler.switch",
+      "reason": "next_runnable",
+      "seq": 13,
+      "to": "pauser",
+      "to_times_switched_to": 2
+    },
+    {
+      "actor": "pauser",
+      "completed": [
+        "before",
+        "resumer",
+        "after"
+      ],
+      "kind": "tasklet.observed",
+      "seq": 14,
+      "target": "completed",
+      "value": "after"
+    },
+    {
+      "actor": "pauser",
+      "alive": false,
+      "kind": "tasklet.complete",
+      "seq": 15,
+      "tasklet": "pauser"
+    },
+    {
+      "actor": "pauser",
+      "from": "pauser",
+      "kind": "scheduler.switch",
+      "reason": "run_complete",
+      "seq": 16,
+      "to": "main"
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": [
+      "before",
+      "resumer",
+      "after"
+    ],
+    "tasklets": {
+      "pauser": {
+        "alive": false,
+        "scheduled": false,
+        "blocked": false,
+        "paused": false,
+        "times_switched_to": 2
+      },
+      "resumer": {
+        "alive": false,
+        "scheduled": false,
+        "blocked": false,
+        "paused": false,
+        "times_switched_to": 1
+      }
+    }
+  }
+}

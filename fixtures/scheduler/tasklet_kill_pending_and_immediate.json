@@ -1,0 +1,144 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "tasklet_kill_pending_and_immediate",
+  "source": {
+    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_tasklet.py::TestTasklets::test_kill_tasklet",
+      "tests/python/scheduler/tests/test_tasklet.py::TestKill::test_kill_pending_true"
+    ],
+    "legacy_behavior": [
+      "Tasklet.cpp::Tasklet::Kill(false) removes a live scheduled tasklet without running its callable.",
+      "Tasklet.cpp::Tasklet::Kill(true) leaves the tasklet scheduled with TaskletExit pending until it is next run."
+    ]
+  },
+  "scenario": {
+    "tasklets": [
+      {
+        "id": "immediate",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "immediate_should_not_run"
+          }
+        ]
+      },
+      {
+        "id": "pending",
+        "body": [
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "pending_should_not_run"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "kill",
+          "tasklet": "immediate",
+          "pending": false
+        },
+        {
+          "op": "kill",
+          "tasklet": "pending",
+          "pending": true
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "seq": 0,
+      "kind": "scheduler.start",
+      "actor": "main"
+    },
+    {
+      "seq": 1,
+      "kind": "tasklet.new",
+      "tasklet": "immediate"
+    },
+    {
+      "seq": 2,
+      "kind": "tasklet.new",
+      "tasklet": "pending"
+    },
+    {
+      "seq": 3,
+      "kind": "tasklet.kill",
+      "tasklet": "immediate",
+      "pending": false,
+      "alive": false,
+      "scheduled": false
+    },
+    {
+      "seq": 4,
+      "kind": "tasklet.kill",
+      "tasklet": "pending",
+      "pending": true,
+      "alive": true,
+      "scheduled": true,
+      "pending_exit": true
+    },
+    {
+      "seq": 5,
+      "kind": "scheduler.run.start",
+      "actor": "main"
+    },
+    {
+      "seq": 6,
+      "kind": "scheduler.switch",
+      "from": "main",
+      "to": "pending",
+      "reason": "next_runnable",
+      "to_times_switched_to": 1
+    },
+    {
+      "seq": 7,
+      "kind": "tasklet.exit",
+      "tasklet": "pending",
+      "exception": "TaskletExit",
+      "pending": true
+    },
+    {
+      "seq": 8,
+      "kind": "tasklet.complete",
+      "tasklet": "pending",
+      "alive": false
+    },
+    {
+      "seq": 9,
+      "kind": "scheduler.switch",
+      "from": "pending",
+      "to": "main",
+      "reason": "run_complete"
+    }
+  ],
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "tasklets": {
+      "immediate": {
+        "alive": false,
+        "scheduled": false,
+        "pending_exit": false,
+        "times_switched_to": 0
+      },
+      "pending": {
+        "alive": false,
+        "scheduled": false,
+        "pending_exit": false,
+        "times_switched_to": 1
+      }
+    },
+    "all_time_tasklet_count": 3,
+    "active_tasklet_count": 1
+  }
+}
