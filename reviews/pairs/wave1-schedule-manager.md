@@ -14,9 +14,9 @@ Rust target:
 
 ## Consolidated Findings
 
-- `SCH-CORE-001`: no Rust scheduler state machine exists for main/current tasklet identity, runnable queue, insert/remove, or run-count parity.
+- `SCH-CORE-001`: done; the scheduler state model and core fixture gate cover main/current identity, runnable order, insert/remove, switch counts, and run-count parity for the current core slice.
 - `SCH-CORE-002`: `BACK`, `FRONT_PLUS_ONE`, `schedule_remove`, and targeted-run boundary behavior need implementation and fixtures.
-- `SCH-CORE-003`: main-tasklet deadlock handling must drain runnable children before raising when applicable.
+- `SCH-CORE-003`: done; immediate receive/send deadlocks and receive/send after runnable-child drain are covered by event-checked scheduler fixtures.
 - `SCH-CORE-004`: nested parent links need a pure core model independent of Greenlet.
 - `SCH-CORE-005`: partial; bounded `run_n_tasklets` fixtures and timeout counters exist, while real monotonic timeout policy remains open.
 - `SCH-CORE-006`: schedule callback points should be trace events before FFI callback execution.
@@ -27,9 +27,9 @@ Rust target:
 
 ## Required Fixtures
 
-- `run_order` runner support.
+- `run_order` runner support is covered.
 - schedule/remove and reschedule-position fixtures.
-- immediate send/receive deadlock fixtures.
+- immediate send/receive deadlock and drain-before-deadlock fixtures are covered.
 - nested parent/yield fixtures.
 - real monotonic timeout-policy fixtures beyond the existing bounded `run_n_tasklets(1)` and timeout-counter coverage.
 - callback-point trace fixtures.
