@@ -12,9 +12,12 @@ use carbon_resources_core::{
     md5_hex, merge_legacy_resource_catalogs, parse_legacy_csv_resource_group,
     parse_legacy_filter_index_mapping_yaml, parse_legacy_filter_ini,
     parse_legacy_yaml_bundle_resource_group, parse_legacy_yaml_patch_resource_group,
-    parse_legacy_yaml_resource_group, remove_legacy_resources, unpack_legacy_local_bundle_from_cdn,
-    unpack_legacy_remote_bundle_from_local_mirror, LegacyBundleDataResource,
-    LegacyPatchDataResource, ResourceCatalog, ResourceRecord,
+    parse_legacy_yaml_resource_group, remove_legacy_resources,
+    resource_catalog_from_arrow_ipc_bytes, resource_catalog_from_parquet_bytes,
+    resource_catalog_to_arrow_ipc_bytes, resource_catalog_to_parquet_bytes,
+    unpack_legacy_local_bundle_from_cdn, unpack_legacy_remote_bundle_from_local_mirror,
+    LegacyBundleDataResource, LegacyPatchDataResource, ResourceCatalog, ResourceCatalogBackend,
+    ResourceRecord,
 };
 use carbon_scheduler_core::{
     run_scenario, ChannelSpec, Entrypoint, Operation, Scenario, TaskletSpec,
@@ -4655,6 +4658,15 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
     }
 
     let status = if failures.is_empty() { "pass" } else { "fail" };
+    let native_columnar_rows = rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.get("serialization_format").and_then(Value::as_str),
+                Some("arrow_ipc" | "parquet_zstd")
+            )
+        })
+        .count();
     let evidence = json!({
         "schema": "carbon.evidence.scalability_matrix.v1",
         "gate": "bench-scalability",
@@ -4696,8 +4708,10 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             "process CPU burn, CPU percent, peak RSS, and CPU seconds per GiB/op where enough data exists"
         ],
         "arrow_scope": {
-            "status": "planned_phase_2",
-            "reason": "The current matrix first establishes non-Arrow scheduler, IO, and data baselines. Arrow should be added only for a concrete row/record-batch pipeline so conversion cost, RSS, and rows/sec can be measured fairly."
+            "status": if native_columnar_rows > 0 { "native_resource_catalog_rows_sampled" } else { "native_resource_catalog_backend_available_not_sampled" },
+            "native_columnar_row_count": native_columnar_rows,
+            "formats": ["arrow_ipc", "parquet_zstd"],
+            "reason": "ResourceCatalog now has a concrete Arrow record-batch backend with Arrow IPC and Parquet/Zstd round-trips. These rows measure native Rust data-format pressure only; they are not legacy C++ speedup claims."
         },
         "summary": scalability_summary(&rows),
         "rows": rows,
@@ -4712,7 +4726,7 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
         "remaining_before_report_ready": [
             "add comparable legacy scheduler process pressure rows before claiming scheduler speedups",
             "add captured legacy Carbon IO rows before claiming Carbon IO speedups",
-            "add Arrow rows only after a concrete record-batch data path is selected",
+            "sample native Arrow IPC and Parquet resource catalog rows with --families data before making data-format conclusions",
             "decide CI thresholds separately from this blog-oriented local evidence snapshot"
         ]
     });
@@ -4894,6 +4908,10 @@ fn scalability_data_specs(tier: ScalabilityTier) -> Vec<ScalabilityWorkerSpec> {
             ("md5-gzip", 16_777_216, 3),
             ("catalog-roundtrip", 1_000, 10),
             ("catalog-roundtrip", 10_000, 2),
+            ("catalog-arrow-ipc-roundtrip", 1_000, 10),
+            ("catalog-arrow-ipc-roundtrip", 10_000, 2),
+            ("catalog-parquet-roundtrip", 1_000, 8),
+            ("catalog-parquet-roundtrip", 10_000, 2),
         ],
         ScalabilityTier::Full => vec![
             ("md5-gzip", 1_048_576_u64, 30_u64),
@@ -4902,6 +4920,12 @@ fn scalability_data_specs(tier: ScalabilityTier) -> Vec<ScalabilityWorkerSpec> {
             ("catalog-roundtrip", 1_000, 30),
             ("catalog-roundtrip", 10_000, 8),
             ("catalog-roundtrip", 50_000, 2),
+            ("catalog-arrow-ipc-roundtrip", 1_000, 30),
+            ("catalog-arrow-ipc-roundtrip", 10_000, 8),
+            ("catalog-arrow-ipc-roundtrip", 50_000, 2),
+            ("catalog-parquet-roundtrip", 1_000, 20),
+            ("catalog-parquet-roundtrip", 10_000, 6),
+            ("catalog-parquet-roundtrip", 50_000, 2),
         ],
     };
 
@@ -5602,7 +5626,7 @@ fn generated_channel_pairs_scenario(pair_count: u64) -> Result<Scenario> {
 
 fn bench_scalability_data_worker(args: &[String]) -> Result<Value> {
     if args.len() != 3 {
-        bail!("data scalability worker requires <md5-gzip|catalog-roundtrip> <size-or-records> <iterations>");
+        bail!("data scalability worker requires <md5-gzip|catalog-roundtrip|catalog-arrow-ipc-roundtrip|catalog-parquet-roundtrip> <size-or-records> <iterations>");
     }
     let kind = args[0].as_str();
     let size_or_records = parse_positive_u64(&args[1], "data pressure size")?;
@@ -5610,6 +5634,12 @@ fn bench_scalability_data_worker(args: &[String]) -> Result<Value> {
     match kind {
         "md5-gzip" => bench_scalability_md5_gzip_worker(size_or_records, iterations),
         "catalog-roundtrip" => bench_scalability_catalog_worker(size_or_records, iterations),
+        "catalog-arrow-ipc-roundtrip" => {
+            bench_scalability_catalog_native_worker(kind, size_or_records, iterations)
+        }
+        "catalog-parquet-roundtrip" => {
+            bench_scalability_catalog_native_worker(kind, size_or_records, iterations)
+        }
         other => bail!("unsupported data scalability kind: {other}"),
     }
 }
@@ -5711,6 +5741,92 @@ fn bench_scalability_catalog_worker(record_count: u64, iterations: u64) -> Resul
         "comparability": "rust_only_data_pressure_not_legacy_comparable",
         "claim_eligibility": "resource_evidence_only_no_speedup_claim",
         "claim_scope": "Rust catalog export/parse pressure row; no matched legacy process baseline."
+    }))
+}
+
+fn bench_scalability_catalog_native_worker(
+    kind: &str,
+    record_count: u64,
+    iterations: u64,
+) -> Result<Value> {
+    let catalog = generated_resource_catalog(record_count)?;
+    let mut latency_samples = Vec::with_capacity(iterations as usize);
+    let mut data_bytes_processed = 0_u64;
+    let mut row_count_processed = 0_u64;
+    let mut serialized_bytes = 0_u64;
+    let started = Instant::now();
+    for _ in 0..iterations {
+        let sample_started = Instant::now();
+        let (document, parsed) = match kind {
+            "catalog-arrow-ipc-roundtrip" => {
+                let document = resource_catalog_to_arrow_ipc_bytes(&catalog).map_err(|error| {
+                    anyhow!("writing generated resource catalog Arrow IPC failed: {error}")
+                })?;
+                let parsed = resource_catalog_from_arrow_ipc_bytes(&document).map_err(|error| {
+                    anyhow!("parsing generated resource catalog Arrow IPC failed: {error}")
+                })?;
+                (document, parsed)
+            }
+            "catalog-parquet-roundtrip" => {
+                let document = resource_catalog_to_parquet_bytes(&catalog).map_err(|error| {
+                    anyhow!("writing generated resource catalog Parquet failed: {error}")
+                })?;
+                let parsed = resource_catalog_from_parquet_bytes(&document).map_err(|error| {
+                    anyhow!("parsing generated resource catalog Parquet failed: {error}")
+                })?;
+                (document, parsed)
+            }
+            other => bail!("unsupported native catalog scalability kind: {other}"),
+        };
+        if parsed != catalog {
+            bail!("{kind} native catalog roundtrip changed catalog semantics");
+        }
+        row_count_processed = row_count_processed
+            .saturating_add(parsed.resources.len() as u64)
+            .saturating_add(record_count);
+        data_bytes_processed =
+            data_bytes_processed.saturating_add((document.len() as u64).saturating_mul(2));
+        serialized_bytes = serialized_bytes.saturating_add(document.len() as u64);
+        latency_samples.push(sample_started.elapsed().as_micros() as u64);
+        black_box(parsed.resources.len());
+        black_box(document.len());
+    }
+    let duration_us = started.elapsed().as_micros() as u64;
+    let serialization_format = if kind == "catalog-arrow-ipc-roundtrip" {
+        "arrow_ipc"
+    } else {
+        "parquet_zstd"
+    };
+
+    Ok(json!({
+        "family": "data",
+        "component": "resources",
+        "workload": format!("data_{kind}_{record_count}"),
+        "implementation": format!("rust_resources_core_{serialization_format}_catalog_roundtrip"),
+        "serialization_format": serialization_format,
+        "pressure": {
+            "axis": "record_count",
+            "record_count": record_count,
+            "iterations_per_process": iterations
+        },
+        "duration_us": duration_us,
+        "duration_ms": duration_ms_from_us(duration_us),
+        "operation_count": iterations.saturating_mul(2),
+        "row_count_processed": row_count_processed,
+        "data_bytes_processed": data_bytes_processed,
+        "serialized_bytes_produced": serialized_bytes,
+        "latency_samples_us": latency_samples,
+        "latency_us_extended": sample_stats_us_extended(&latency_samples),
+        "throughput_operations_per_sec": rate_per_second_us(iterations.saturating_mul(2), duration_us),
+        "throughput_rows_per_sec": rate_per_second_us(row_count_processed, duration_us),
+        "throughput_data_bytes_per_sec": rate_per_second_us(data_bytes_processed, duration_us),
+        "primary_throughput_metric": "throughput_rows_per_sec",
+        "primary_latency_metric": "latency_us_extended",
+        "parity_status": "pass",
+        "parity_gate": "resource_catalog_native_roundtrip",
+        "comparability": "rust_only_native_columnar_data_pressure_not_legacy_comparable",
+        "claim_eligibility": "resource_evidence_only_no_speedup_claim",
+        "claim_scope": "Rust native columnar resource catalog pressure row; compares data-format cost but is not a legacy C++ speedup claim."
     }))
 }
 
@@ -11459,6 +11575,7 @@ fn rust_create_group(args: Vec<String>) -> Result<()> {
     let mut input_directory: Option<PathBuf> = None;
     let mut output_file = PathBuf::from("ResourceGroup.yaml");
     let mut document_version = String::from("0.1.0");
+    let mut resource_backend = ResourceCatalogBackend::Legacy;
     let mut resource_prefix: Option<String> = None;
     let mut calculate_compressions = true;
     let mut export_resources = false;
@@ -11481,6 +11598,17 @@ fn rust_create_group(args: Vec<String>) -> Result<()> {
                     bail!("--document-version requires a value");
                 };
                 document_version = value.clone();
+            }
+            "--resource-backend" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    bail!("--resource-backend requires legacy, arrow-ipc, or parquet");
+                };
+                resource_backend = ResourceCatalogBackend::parse(value).ok_or_else(|| {
+                    anyhow!(
+                        "--resource-backend requires legacy, arrow-ipc, or parquet, got {value}"
+                    )
+                })?;
             }
             "--resource-prefix" => {
                 index += 1;
@@ -11517,7 +11645,7 @@ fn rust_create_group(args: Vec<String>) -> Result<()> {
             }
             "--help" | "-h" => {
                 println!(
-                    "usage: xtask rust-create-group [options] <input-directory>\n\noptions:\n  --output-file <path>\n  --document-version <0.1.0|0.0.0>\n  --resource-prefix <prefix>\n  --skip-compression\n  --export-resources\n  --export-resources-destination-type LOCAL_RELATIVE\n  --export-resources-destination-path <path>"
+                    "usage: xtask rust-create-group [options] <input-directory>\n\noptions:\n  --output-file <path>\n  --document-version <0.1.0|0.0.0>\n  --resource-backend <legacy|arrow-ipc|parquet>\n  --resource-prefix <prefix>\n  --skip-compression\n  --export-resources\n  --export-resources-destination-type LOCAL_RELATIVE\n  --export-resources-destination-path <path>"
                 );
                 return Ok(());
             }
@@ -11543,11 +11671,24 @@ fn rust_create_group(args: Vec<String>) -> Result<()> {
     )
     .map_err(|error| anyhow!("creating Rust resource group failed: {error}"))?;
 
-    let output = match document_version.as_str() {
-        "0.0.0" => carbon_resources_core::export_legacy_csv_resource_group(&catalog),
-        "0.1.0" => export_legacy_yaml_resource_group(&catalog),
-        other => bail!("unsupported rust-create-group document version: {other}"),
-    };
+    let output =
+        match resource_backend {
+            ResourceCatalogBackend::Legacy => match document_version.as_str() {
+                "0.0.0" => {
+                    carbon_resources_core::export_legacy_csv_resource_group(&catalog).into_bytes()
+                }
+                "0.1.0" => export_legacy_yaml_resource_group(&catalog).into_bytes(),
+                other => bail!("unsupported rust-create-group document version: {other}"),
+            },
+            ResourceCatalogBackend::ArrowIpc => resource_catalog_to_arrow_ipc_bytes(&catalog)
+                .map_err(|error| {
+                    anyhow!("writing Rust create-group Arrow IPC catalog failed: {error}")
+                })?,
+            ResourceCatalogBackend::Parquet => resource_catalog_to_parquet_bytes(&catalog)
+                .map_err(|error| {
+                    anyhow!("writing Rust create-group Parquet catalog failed: {error}")
+                })?,
+        };
 
     if let Some(parent) = output_file
         .parent()
@@ -11556,8 +11697,13 @@ fn rust_create_group(args: Vec<String>) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating output directory {}", parent.display()))?;
     }
-    fs::write(&output_file, output)
-        .with_context(|| format!("writing Rust create-group output {}", output_file.display()))?;
+    fs::write(&output_file, output).with_context(|| {
+        format!(
+            "writing Rust create-group {} output {}",
+            resource_backend.as_str(),
+            output_file.display()
+        )
+    })?;
 
     if export_resources {
         if export_resources_destination_type != "LOCAL_RELATIVE" {

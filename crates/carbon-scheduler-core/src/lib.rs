@@ -407,9 +407,9 @@ pub struct CoreScheduler {
     next_tasklet: u64,
     next_channel: u64,
     next_run_queue: u64,
-    tasklets: BTreeMap<CoreTaskletId, CoreTaskletState>,
-    channels: BTreeMap<CoreChannelId, CoreChannelState>,
-    run_queues: BTreeMap<CoreRunQueueId, CoreRunQueueState>,
+    tasklets: Vec<CoreTaskletState>,
+    channels: Vec<CoreChannelState>,
+    run_queues: Vec<CoreRunQueueState>,
 }
 
 impl CoreScheduler {
@@ -420,42 +420,36 @@ impl CoreScheduler {
     pub fn create_tasklet(&mut self) -> CoreTaskletId {
         let id = CoreTaskletId(self.next_tasklet);
         self.next_tasklet += 1;
-        self.tasklets.insert(
-            id,
-            CoreTaskletState {
-                lifecycle: CoreTaskletLifecycle::Runnable,
-                blocked_on: None,
-                block_trap: false,
-                alive: true,
-                scheduled: false,
-                run_queue: None,
-                paused: false,
-                times_switched_to: 0,
-            },
-        );
+        self.tasklets.push(CoreTaskletState {
+            lifecycle: CoreTaskletLifecycle::Runnable,
+            blocked_on: None,
+            block_trap: false,
+            alive: true,
+            scheduled: false,
+            run_queue: None,
+            paused: false,
+            times_switched_to: 0,
+        });
         id
     }
 
     pub fn create_channel(&mut self, preference: i64) -> CoreChannelId {
         let id = CoreChannelId(self.next_channel);
         self.next_channel += 1;
-        self.channels.insert(
-            id,
-            CoreChannelState {
-                preference: preference.clamp(-1, 1),
-                closing: false,
-                closed: false,
-                blocked_senders: VecDeque::new(),
-                blocked_receivers: VecDeque::new(),
-            },
-        );
+        self.channels.push(CoreChannelState {
+            preference: preference.clamp(-1, 1),
+            closing: false,
+            closed: false,
+            blocked_senders: VecDeque::new(),
+            blocked_receivers: VecDeque::new(),
+        });
         id
     }
 
     pub fn create_run_queue(&mut self) -> CoreRunQueueId {
         let id = CoreRunQueueId(self.next_run_queue);
         self.next_run_queue += 1;
-        self.run_queues.insert(id, CoreRunQueueState::default());
+        self.run_queues.push(CoreRunQueueState::default());
         id
     }
 
@@ -522,7 +516,7 @@ impl CoreScheduler {
         times_switched_to: u64,
     ) -> Result<(), CoreSchedulerHandleError> {
         self.ensure_tasklet(tasklet)?;
-        if !alive {
+        if !alive && self.tasklet(tasklet)?.scheduled {
             self.remove_tasklet_from_run_queues(tasklet);
         }
         let tasklet_state = self.tasklet_mut(tasklet)?;
@@ -544,7 +538,9 @@ impl CoreScheduler {
         tasklet: CoreTaskletId,
     ) -> Result<(), CoreSchedulerHandleError> {
         self.ensure_tasklet(tasklet)?;
-        self.remove_tasklet_from_run_queues(tasklet);
+        if self.tasklet(tasklet)?.scheduled {
+            self.remove_tasklet_from_run_queues(tasklet);
+        }
         let tasklet_state = self.tasklet_mut(tasklet)?;
         tasklet_state.alive = true;
         tasklet_state.scheduled = false;
@@ -586,7 +582,9 @@ impl CoreScheduler {
     ) -> Result<(), CoreSchedulerHandleError> {
         self.ensure_tasklet(tasklet)?;
         self.ensure_run_queue(queue)?;
-        self.remove_tasklet_from_run_queues(tasklet);
+        if self.tasklet(tasklet)?.scheduled {
+            self.remove_tasklet_from_run_queues(tasklet);
+        }
         self.run_queue_mut(queue)?.runnable.push_back(tasklet);
         let tasklet_state = self.tasklet_mut(tasklet)?;
         tasklet_state.run_queue = Some(queue);
@@ -605,7 +603,7 @@ impl CoreScheduler {
         scheduled: bool,
     ) -> Result<(), CoreSchedulerHandleError> {
         self.ensure_tasklet(tasklet)?;
-        if !scheduled {
+        if !scheduled && self.tasklet(tasklet)?.scheduled {
             self.remove_tasklet_from_run_queues(tasklet);
         }
         self.tasklet_mut(tasklet)?.scheduled = scheduled;
@@ -898,8 +896,38 @@ impl CoreScheduler {
     }
 
     fn remove_tasklet_from_run_queues(&mut self, tasklet: CoreTaskletId) {
-        for queue in self.run_queues.values_mut() {
+        for queue in &mut self.run_queues {
             queue.runnable.retain(|candidate| *candidate != tasklet);
+        }
+    }
+
+    fn tasklet_index(&self, tasklet: CoreTaskletId) -> Result<usize, CoreSchedulerHandleError> {
+        let index = usize::try_from(tasklet.0)
+            .map_err(|_| CoreSchedulerHandleError::MissingTasklet(tasklet))?;
+        if index < self.tasklets.len() {
+            Ok(index)
+        } else {
+            Err(CoreSchedulerHandleError::MissingTasklet(tasklet))
+        }
+    }
+
+    fn channel_index(&self, channel: CoreChannelId) -> Result<usize, CoreSchedulerHandleError> {
+        let index = usize::try_from(channel.0)
+            .map_err(|_| CoreSchedulerHandleError::MissingChannel(channel))?;
+        if index < self.channels.len() {
+            Ok(index)
+        } else {
+            Err(CoreSchedulerHandleError::MissingChannel(channel))
+        }
+    }
+
+    fn run_queue_index(&self, queue: CoreRunQueueId) -> Result<usize, CoreSchedulerHandleError> {
+        let index = usize::try_from(queue.0)
+            .map_err(|_| CoreSchedulerHandleError::MissingRunQueue(queue))?;
+        if index < self.run_queues.len() {
+            Ok(index)
+        } else {
+            Err(CoreSchedulerHandleError::MissingRunQueue(queue))
         }
     }
 
@@ -907,54 +935,45 @@ impl CoreScheduler {
         &self,
         tasklet: CoreTaskletId,
     ) -> Result<&CoreTaskletState, CoreSchedulerHandleError> {
-        self.tasklets
-            .get(&tasklet)
-            .ok_or(CoreSchedulerHandleError::MissingTasklet(tasklet))
+        Ok(&self.tasklets[self.tasklet_index(tasklet)?])
     }
 
     fn tasklet_mut(
         &mut self,
         tasklet: CoreTaskletId,
     ) -> Result<&mut CoreTaskletState, CoreSchedulerHandleError> {
-        self.tasklets
-            .get_mut(&tasklet)
-            .ok_or(CoreSchedulerHandleError::MissingTasklet(tasklet))
+        let index = self.tasklet_index(tasklet)?;
+        Ok(&mut self.tasklets[index])
     }
 
     fn channel(
         &self,
         channel: CoreChannelId,
     ) -> Result<&CoreChannelState, CoreSchedulerHandleError> {
-        self.channels
-            .get(&channel)
-            .ok_or(CoreSchedulerHandleError::MissingChannel(channel))
+        Ok(&self.channels[self.channel_index(channel)?])
     }
 
     fn channel_mut(
         &mut self,
         channel: CoreChannelId,
     ) -> Result<&mut CoreChannelState, CoreSchedulerHandleError> {
-        self.channels
-            .get_mut(&channel)
-            .ok_or(CoreSchedulerHandleError::MissingChannel(channel))
+        let index = self.channel_index(channel)?;
+        Ok(&mut self.channels[index])
     }
 
     fn run_queue(
         &self,
         queue: CoreRunQueueId,
     ) -> Result<&CoreRunQueueState, CoreSchedulerHandleError> {
-        self.run_queues
-            .get(&queue)
-            .ok_or(CoreSchedulerHandleError::MissingRunQueue(queue))
+        Ok(&self.run_queues[self.run_queue_index(queue)?])
     }
 
     fn run_queue_mut(
         &mut self,
         queue: CoreRunQueueId,
     ) -> Result<&mut CoreRunQueueState, CoreSchedulerHandleError> {
-        self.run_queues
-            .get_mut(&queue)
-            .ok_or(CoreSchedulerHandleError::MissingRunQueue(queue))
+        let index = self.run_queue_index(queue)?;
+        Ok(&mut self.run_queues[index])
     }
 }
 

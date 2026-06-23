@@ -1,13 +1,52 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::c_void;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::os::raw::{c_char, c_int, c_uint, c_ulong};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+
+use arrow::array::{Array, ArrayRef, StringArray, UInt64Array};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::ipc::reader::FileReader as ArrowFileReader;
+use arrow::ipc::writer::FileWriter as ArrowFileWriter;
+use arrow::record_batch::RecordBatch;
+use bytes::Bytes;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::ArrowWriter;
+use parquet::basic::{Compression, ZstdLevel};
+use parquet::file::properties::WriterProperties;
 
 const LEGACY_BSDIFF_HEADER: &[u8; 16] = b"ENDSLEY/BSDIFF43";
 const LEGACY_BSDIFF_HEADER_SIZE: usize = LEGACY_BSDIFF_HEADER.len() + 8;
+pub const RESOURCE_CATALOG_ARROW_SCHEMA: &str = "carbon.resources.catalog.arrow.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceCatalogBackend {
+    Legacy,
+    ArrowIpc,
+    Parquet,
+}
+
+impl ResourceCatalogBackend {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "legacy" => Some(Self::Legacy),
+            "arrow-ipc" => Some(Self::ArrowIpc),
+            "parquet" => Some(Self::Parquet),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::ArrowIpc => "arrow-ipc",
+            Self::Parquet => "parquet",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceRecord {
@@ -257,6 +296,327 @@ impl PatchResourceCatalog {
     pub fn is_empty(&self) -> bool {
         self.resources.is_empty()
     }
+}
+
+pub fn resource_catalog_arrow_batch(catalog: &ResourceCatalog) -> Result<RecordBatch, String> {
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        String::from("carbon.schema"),
+        String::from(RESOURCE_CATALOG_ARROW_SCHEMA),
+    );
+    metadata.insert(
+        String::from("carbon.catalog.version"),
+        catalog.version.clone(),
+    );
+    metadata.insert(
+        String::from("carbon.catalog.type"),
+        catalog.catalog_type.clone(),
+    );
+    metadata.insert(
+        String::from("carbon.catalog.total_uncompressed_size_bytes"),
+        catalog.total_uncompressed_size_bytes.to_string(),
+    );
+    if let Some(total) = catalog.total_compressed_size_bytes {
+        metadata.insert(
+            String::from("carbon.catalog.total_compressed_size_bytes"),
+            total.to_string(),
+        );
+    }
+
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("catalog_version", DataType::Utf8, false),
+            Field::new("catalog_type", DataType::Utf8, false),
+            Field::new(
+                "catalog_total_compressed_size_bytes",
+                DataType::UInt64,
+                true,
+            ),
+            Field::new(
+                "catalog_total_uncompressed_size_bytes",
+                DataType::UInt64,
+                false,
+            ),
+            Field::new("path", DataType::Utf8, false),
+            Field::new("location", DataType::Utf8, false),
+            Field::new("size_bytes", DataType::UInt64, false),
+            Field::new("compressed_size_bytes", DataType::UInt64, true),
+            Field::new("checksum", DataType::Utf8, true),
+            Field::new("binary_operation", DataType::UInt64, true),
+            Field::new("prefix", DataType::Utf8, true),
+        ],
+        metadata,
+    ));
+
+    let catalog_version = StringArray::from_iter_values(
+        (0..catalog.resources.len()).map(|_| catalog.version.as_str()),
+    );
+    let catalog_type = StringArray::from_iter_values(
+        (0..catalog.resources.len()).map(|_| catalog.catalog_type.as_str()),
+    );
+    let catalog_total_compressed_values =
+        vec![catalog.total_compressed_size_bytes; catalog.resources.len()];
+    let catalog_total_compressed_size_bytes = UInt64Array::from(catalog_total_compressed_values);
+    let catalog_total_uncompressed_size_bytes = UInt64Array::from_iter_values(
+        (0..catalog.resources.len()).map(|_| catalog.total_uncompressed_size_bytes),
+    );
+    let path = StringArray::from_iter_values(catalog.resources.iter().map(|record| &record.path));
+    let location =
+        StringArray::from_iter_values(catalog.resources.iter().map(|record| &record.location));
+    let size_bytes =
+        UInt64Array::from_iter_values(catalog.resources.iter().map(|record| record.size_bytes));
+    let compressed_size_bytes = UInt64Array::from(
+        catalog
+            .resources
+            .iter()
+            .map(|record| record.compressed_size_bytes)
+            .collect::<Vec<_>>(),
+    );
+    let checksum = StringArray::from(
+        catalog
+            .resources
+            .iter()
+            .map(|record| record.checksum.as_deref())
+            .collect::<Vec<_>>(),
+    );
+    let binary_operation = UInt64Array::from(
+        catalog
+            .resources
+            .iter()
+            .map(|record| record.binary_operation)
+            .collect::<Vec<_>>(),
+    );
+    let prefix = StringArray::from(
+        catalog
+            .resources
+            .iter()
+            .map(|record| record.prefix.as_deref())
+            .collect::<Vec<_>>(),
+    );
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(catalog_version) as ArrayRef,
+            Arc::new(catalog_type),
+            Arc::new(catalog_total_compressed_size_bytes),
+            Arc::new(catalog_total_uncompressed_size_bytes),
+            Arc::new(path),
+            Arc::new(location),
+            Arc::new(size_bytes),
+            Arc::new(compressed_size_bytes),
+            Arc::new(checksum),
+            Arc::new(binary_operation),
+            Arc::new(prefix),
+        ],
+    )
+    .map_err(|error| format!("building resource catalog Arrow batch: {error}"))
+}
+
+pub fn resource_catalog_from_arrow_batch(batch: &RecordBatch) -> Result<ResourceCatalog, String> {
+    let schema = batch.schema();
+    let metadata = schema.metadata();
+    let has_metadata_schema =
+        metadata.get("carbon.schema").map(String::as_str) == Some(RESOURCE_CATALOG_ARROW_SCHEMA);
+    let has_column_schema = batch.column_by_name("catalog_version").is_some()
+        && batch.column_by_name("catalog_type").is_some()
+        && batch
+            .column_by_name("catalog_total_uncompressed_size_bytes")
+            .is_some();
+    if !has_metadata_schema && !has_column_schema {
+        return Err(String::from(
+            "Arrow batch is not a carbon resource catalog schema",
+        ));
+    }
+    let catalog_version = string_column(batch, "catalog_version").ok();
+    let catalog_type = string_column(batch, "catalog_type").ok();
+    let catalog_total_compressed_size_bytes =
+        u64_column(batch, "catalog_total_compressed_size_bytes").ok();
+    let catalog_total_uncompressed_size_bytes =
+        u64_column(batch, "catalog_total_uncompressed_size_bytes").ok();
+    let path = string_column(batch, "path")?;
+    let location = string_column(batch, "location")?;
+    let size_bytes = u64_column(batch, "size_bytes")?;
+    let compressed_size_bytes = u64_column(batch, "compressed_size_bytes")?;
+    let checksum = string_column(batch, "checksum")?;
+    let binary_operation = u64_column(batch, "binary_operation")?;
+    let prefix = string_column(batch, "prefix")?;
+
+    let mut resources = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        resources.push(ResourceRecord {
+            path: required_string(path, row, "path")?,
+            location: required_string(location, row, "location")?,
+            size_bytes: required_u64(size_bytes, row, "size_bytes")?,
+            compressed_size_bytes: optional_u64(compressed_size_bytes, row),
+            checksum: optional_string(checksum, row),
+            binary_operation: optional_u64(binary_operation, row),
+            prefix: optional_string(prefix, row),
+        });
+    }
+
+    Ok(ResourceCatalog {
+        version: metadata
+            .get("carbon.catalog.version")
+            .cloned()
+            .or_else(|| first_optional_string(catalog_version))
+            .unwrap_or_else(|| String::from("0.1.0")),
+        catalog_type: metadata
+            .get("carbon.catalog.type")
+            .cloned()
+            .or_else(|| first_optional_string(catalog_type))
+            .unwrap_or_else(|| String::from("ResourceGroup")),
+        total_compressed_size_bytes: metadata
+            .get("carbon.catalog.total_compressed_size_bytes")
+            .and_then(|value| value.parse::<u64>().ok())
+            .or_else(|| first_optional_u64(catalog_total_compressed_size_bytes)),
+        total_uncompressed_size_bytes: metadata
+            .get("carbon.catalog.total_uncompressed_size_bytes")
+            .and_then(|value| value.parse::<u64>().ok())
+            .or_else(|| first_optional_u64(catalog_total_uncompressed_size_bytes))
+            .unwrap_or_else(|| resources.iter().map(|record| record.size_bytes).sum()),
+        resources,
+    })
+}
+
+pub fn resource_catalog_to_arrow_ipc_bytes(catalog: &ResourceCatalog) -> Result<Vec<u8>, String> {
+    let batch = resource_catalog_arrow_batch(catalog)?;
+    let mut output = Vec::new();
+    {
+        let mut writer = ArrowFileWriter::try_new(&mut output, batch.schema().as_ref())
+            .map_err(|error| format!("creating resource catalog Arrow IPC writer: {error}"))?;
+        writer
+            .write(&batch)
+            .map_err(|error| format!("writing resource catalog Arrow IPC batch: {error}"))?;
+        writer
+            .finish()
+            .map_err(|error| format!("finishing resource catalog Arrow IPC writer: {error}"))?;
+    }
+    Ok(output)
+}
+
+pub fn resource_catalog_from_arrow_ipc_bytes(bytes: &[u8]) -> Result<ResourceCatalog, String> {
+    let reader = ArrowFileReader::try_new(Cursor::new(bytes), None)
+        .map_err(|error| format!("reading resource catalog Arrow IPC: {error}"))?;
+    let mut batches = Vec::new();
+    for batch in reader {
+        batches.push(batch.map_err(|error| format!("reading Arrow IPC record batch: {error}"))?);
+    }
+    resource_catalog_from_batches(&batches)
+}
+
+pub fn resource_catalog_to_parquet_bytes(catalog: &ResourceCatalog) -> Result<Vec<u8>, String> {
+    let batch = resource_catalog_arrow_batch(catalog)?;
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::ZSTD(ZstdLevel::default()))
+        .build();
+    let mut output = Vec::new();
+    {
+        let mut writer = ArrowWriter::try_new(&mut output, batch.schema(), Some(properties))
+            .map_err(|error| format!("creating resource catalog Parquet writer: {error}"))?;
+        writer
+            .write(&batch)
+            .map_err(|error| format!("writing resource catalog Parquet batch: {error}"))?;
+        writer
+            .close()
+            .map_err(|error| format!("finishing resource catalog Parquet writer: {error}"))?;
+    }
+    Ok(output)
+}
+
+pub fn resource_catalog_from_parquet_bytes(bytes: &[u8]) -> Result<ResourceCatalog, String> {
+    let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))
+        .map_err(|error| format!("reading resource catalog Parquet metadata: {error}"))?
+        .build()
+        .map_err(|error| format!("building resource catalog Parquet reader: {error}"))?;
+    let mut batches = Vec::new();
+    for batch in reader {
+        batches.push(batch.map_err(|error| format!("reading Parquet record batch: {error}"))?);
+    }
+    resource_catalog_from_batches(&batches)
+}
+
+fn resource_catalog_from_batches(batches: &[RecordBatch]) -> Result<ResourceCatalog, String> {
+    let mut catalog: Option<ResourceCatalog> = None;
+    for batch in batches {
+        let next = resource_catalog_from_arrow_batch(batch)?;
+        if let Some(catalog) = &mut catalog {
+            catalog.resources.extend(next.resources);
+            catalog.total_uncompressed_size_bytes = catalog
+                .resources
+                .iter()
+                .map(|record| record.size_bytes)
+                .sum();
+            catalog.total_compressed_size_bytes = catalog
+                .resources
+                .iter()
+                .map(|record| record.compressed_size_bytes)
+                .try_fold(0_u64, |total, value| value.map(|value| total + value));
+        } else {
+            catalog = Some(next);
+        }
+    }
+    catalog.ok_or_else(|| String::from("resource catalog contained no Arrow record batches"))
+}
+
+fn string_column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StringArray, String> {
+    batch
+        .column_by_name(name)
+        .ok_or_else(|| format!("missing Arrow resource catalog column {name}"))?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| format!("Arrow resource catalog column {name} is not Utf8"))
+}
+
+fn u64_column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt64Array, String> {
+    batch
+        .column_by_name(name)
+        .ok_or_else(|| format!("missing Arrow resource catalog column {name}"))?
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| format!("Arrow resource catalog column {name} is not UInt64"))
+}
+
+fn required_string(column: &StringArray, row: usize, name: &str) -> Result<String, String> {
+    if column.is_null(row) {
+        return Err(format!(
+            "required Arrow resource catalog column {name} is null at row {row}"
+        ));
+    }
+    Ok(column.value(row).to_string())
+}
+
+fn optional_string(column: &StringArray, row: usize) -> Option<String> {
+    (!column.is_null(row)).then(|| column.value(row).to_string())
+}
+
+fn first_optional_string(column: Option<&StringArray>) -> Option<String> {
+    column.and_then(|column| {
+        (column.len() > 0)
+            .then(|| optional_string(column, 0))
+            .flatten()
+    })
+}
+
+fn required_u64(column: &UInt64Array, row: usize, name: &str) -> Result<u64, String> {
+    if column.is_null(row) {
+        return Err(format!(
+            "required Arrow resource catalog column {name} is null at row {row}"
+        ));
+    }
+    Ok(column.value(row))
+}
+
+fn optional_u64(column: &UInt64Array, row: usize) -> Option<u64> {
+    (!column.is_null(row)).then(|| column.value(row))
+}
+
+fn first_optional_u64(column: Option<&UInt64Array>) -> Option<u64> {
+    column.and_then(|column| {
+        (column.len() > 0)
+            .then(|| optional_u64(column, 0))
+            .flatten()
+    })
 }
 
 pub fn parse_legacy_yaml_resource_group(input: &str) -> Result<ResourceCatalog, String> {
@@ -3833,6 +4193,59 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    fn resource_catalog_arrow_ipc_roundtrips_without_legacy_text() {
+        let catalog = ResourceCatalog {
+            version: String::from("0.1.0"),
+            catalog_type: String::from("ResourceGroup"),
+            total_compressed_size_bytes: Some(18),
+            total_uncompressed_size_bytes: 42,
+            resources: vec![
+                ResourceRecord {
+                    path: String::from("a.bin"),
+                    location: String::from("chunks/a"),
+                    size_bytes: 17,
+                    compressed_size_bytes: Some(9),
+                    checksum: Some(String::from("abc")),
+                    binary_operation: Some(1),
+                    prefix: Some(String::from("res")),
+                },
+                ResourceRecord {
+                    path: String::from("b.bin"),
+                    location: String::from("chunks/b"),
+                    size_bytes: 25,
+                    compressed_size_bytes: None,
+                    checksum: None,
+                    binary_operation: None,
+                    prefix: None,
+                },
+            ],
+        };
+
+        let bytes =
+            resource_catalog_to_arrow_ipc_bytes(&catalog).expect("catalog writes to Arrow IPC");
+        assert!(!bytes.is_empty());
+        let parsed =
+            resource_catalog_from_arrow_ipc_bytes(&bytes).expect("catalog reads from Arrow IPC");
+
+        assert_eq!(parsed, catalog);
+    }
+
+    #[test]
+    fn resource_catalog_parquet_roundtrips_legacy_fixture_catalog() {
+        let text = fs::read_to_string(test_data_path(
+            "CreateResourceFiles/ResourceGroupLinux.yaml",
+        ))
+        .expect("fixture exists");
+        let catalog = parse_legacy_yaml_resource_group(&text).expect("fixture parses");
+
+        let bytes = resource_catalog_to_parquet_bytes(&catalog).expect("catalog writes Parquet");
+        assert!(!bytes.is_empty());
+        let parsed = resource_catalog_from_parquet_bytes(&bytes).expect("catalog reads Parquet");
+
+        assert_eq!(parsed, catalog);
+    }
 
     #[test]
     fn md5_matches_legacy_string_fixture() {

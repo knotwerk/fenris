@@ -872,6 +872,110 @@ def scheduler_pressure_comparison_rows(rows: list[dict]) -> str:
     return "\n".join(rendered)
 
 
+def scheduler_regression_target(workload: str) -> str:
+    if workload.startswith("fanout_pipeline"):
+        return "Batch channel wakeups, reduce Python bridge touches, and profile message fanout allocations first."
+    if workload.startswith("zone_tick_study"):
+        return "Separate dense entity work from scheduler dispatch; test scalar Rust snapshot, then Rayon/SIMD only after profiling."
+    if workload.startswith("channel_rendezvous"):
+        return "Move channel wait queues to ID-linked O(1) queues and remove bridge-global ordering work from the handoff path."
+    if workload.startswith("runnable_tasklets"):
+        return "Replace BTreeMap/VecDeque scans with dense tasklet storage and known-tasklet O(1) queue removal."
+    return "Keep parity green, profile row-level costs, and land only measured wins."
+
+
+def scheduler_regression_rows(rows: list[dict]) -> str:
+    if not rows:
+        return '<tr><td colspan="5">No scheduler regression rows available.</td></tr>'
+    rendered = []
+    for row in sorted(rows, key=lambda item: float(item.get("speedup") or 0)):
+        workload = str(row.get("workload") or "")
+        title, description = workload_label(workload)
+        speedup = number(row.get("speedup"))
+        p99_reduction = reduction_percent(
+            path_value(row, "/legacy_sample_stats_us/p99"),
+            path_value(row, "/rust_sample_stats_us/p99"),
+        )
+        cpu_reduction = reduction_percent(
+            path_value(row, "/legacy_process_stats/cpu_burn_effective_ms/mean"),
+            path_value(row, "/rust_process_stats/cpu_burn_effective_ms/mean"),
+        )
+        rendered.append(
+            "<tr>"
+            f"<td><strong>{h(title)}</strong><small>{h(description)}</small></td>"
+            f"<td><strong>{fmt_directional_ratio(speedup)}</strong><small>target gate: row must be at least 1.0x before robust-win promotion</small></td>"
+            f"<td><strong>{fmt_signed_percent(p99_reduction)}</strong><small>{fmt_us(path_value(row, '/legacy_sample_stats_us/p99'))} legacy vs {fmt_us(path_value(row, '/rust_sample_stats_us/p99'))} Rust</small></td>"
+            f"<td><strong>{fmt_signed_percent(cpu_reduction)}</strong><small>effective CPU burn</small></td>"
+            f"<td>{h(scheduler_regression_target(workload))}</td>"
+            "</tr>"
+        )
+    return "\n".join(rendered)
+
+
+def optimization_loop_section() -> str:
+    cards = [
+        (
+            "Gate",
+            "Every iteration starts from passing semantic parity and the current matched benchmark row. No speedup claim is promoted from a failing or unmatched row.",
+        ),
+        (
+            "Hypothesis",
+            "Each change must name the likely cost source: queue scan, Python bridge touch, allocation, lifecycle branch, data conversion, or dense data kernel.",
+        ),
+        (
+            "Decision",
+            "Land only if the row improves and no quick scheduler row regresses. Delete or isolate experiments that do not beat the scalar/simple baseline.",
+        ),
+        (
+            "Robust win",
+            "Promotion requires at least 1.20x median scheduler throughput, no quick row below 1.0x, zero semantic mismatches, and Rust p99 no worse than legacy.",
+        ),
+    ]
+    return "\n".join(
+        f"<article><h3>{h(title)}</h3><p>{h(body)}</p></article>" for title, body in cards
+    )
+
+
+def resource_format_rows(rows: list[dict]) -> str:
+    format_rows = [
+        row
+        for row in rows
+        if row.get("component") == "resources" and row.get("serialization_format")
+    ]
+    if not format_rows:
+        return '<tr><td colspan="7">No native Arrow IPC or Parquet resource rows were sampled in this evidence file.</td></tr>'
+    rendered = []
+    for row in sorted(format_rows, key=lambda item: str(item.get("workload") or "")):
+        title = str(row.get("serialization_format") or "native").replace("_", " ").title()
+        pressure = row.get("pressure") or {}
+        rendered.append(
+            "<tr>"
+            f"<td><strong>{h(title)}</strong><small>{h(row.get('workload'))}</small></td>"
+            f"<td>{h(fmt_int(pressure.get('record_count')))}</td>"
+            f"<td>{h(fmt_rate(row.get('throughput_rows_per_sec'), 'rows'))}</td>"
+            f"<td>{h(fmt_rate(row.get('throughput_data_bytes_per_sec'), 'bytes'))}</td>"
+            f"<td>{h(fmt_us(path_value(row, '/latency_us_extended/p99')))}</td>"
+            f"<td>{h(fmt_kb(path_value(row, '/process_stats/max_rss_kb/p95')))}</td>"
+            f"<td><small>{h(row.get('claim_scope') or row.get('comparability'))}</small></td>"
+            "</tr>"
+        )
+    return "\n".join(rendered)
+
+
+def technology_fit_section() -> str:
+    items = [
+        ("Arrow IPC", "Use now for native resource catalog transport, parity batches, and offline trace batches; keep it off scheduler dispatch."),
+        ("Parquet/Zstd", "Use now for persisted resource catalog snapshots and long-lived benchmark/trace batches."),
+        ("Rayon", "Use after scalar Rust dense-data baselines prove the work is pure Rust and scheduler wakeup cost will not erase the win."),
+        ("SIMD", "Use only for profiled dense kernels such as filters, masks, checksums, serialization, or diagnostics; do not SIMD-optimize FIFO/channel control flow."),
+        ("Tokio", "Keep out of tasklet scheduling. Consider only behind a future local reactor abstraction for IO evidence."),
+        ("Proto", "Consider for compact control frames only if Arrow IPC is a poor fit; do not replace resource columnar data with ad hoc JSON/Proto envelopes."),
+    ]
+    return "\n".join(
+        f"<article><h3>{h(title)}</h3><p>{h(body)}</p></article>" for title, body in items
+    )
+
+
 def pressure_label(row: dict) -> tuple[str, str]:
     workload = str(row.get("workload") or "")
     pressure = row.get("pressure") or {}
@@ -1076,13 +1180,12 @@ def render(evidence_dir: Path) -> str:
     scheduler_path = evidence_dir / "scheduler-comparison.json"
     scheduler_evidence = load_json(scheduler_path) if scheduler_path.exists() else {}
     all_scheduler_rows = scheduler_comparable_rows(scheduler_evidence)
-    matched_pressure_rows = scheduler_pressure_comparable_rows(all_scheduler_rows)
-    if scheduler_report_is_publishable(scheduler_evidence, matched_pressure_rows):
+    if scheduler_report_is_publishable(scheduler_evidence, all_scheduler_rows):
         bench = scheduler_evidence
-        rows = matched_pressure_rows
+        rows = all_scheduler_rows
     else:
         bench = scheduler_evidence
-        rows = matched_pressure_rows
+        rows = all_scheduler_rows
         return blocked_report(evidence_dir, bench, rows)
 
     resources_evidence = optional_json(evidence_dir / "bench-tier-local.json")
@@ -1092,6 +1195,11 @@ def render(evidence_dir: Path) -> str:
         row
         for row in scalability_evidence.get("rows", []) or []
         if row.get("component") == "scheduler"
+    ]
+    resource_format_row_data = [
+        row
+        for row in scalability_evidence.get("rows", []) or []
+        if row.get("component") == "resources" and row.get("serialization_format")
     ]
     io_evidence = optional_json(evidence_dir / "io-workloads.json")
     io_comparison_rows = io_evidence.get("comparisons", []) or []
@@ -1389,6 +1497,86 @@ def render(evidence_dir: Path) -> str:
     <section>
       <div class="section-head">
         <div>
+          <h2>Current Scheduler Regressions</h2>
+          <p>Rows are sorted from worst to least bad. These are the first optimization targets before any stronger scheduler performance claim.</p>
+        </div>
+        <span class="tag">Fix first</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Workload</th>
+              <th>Current ratio</th>
+              <th>p99 tail</th>
+              <th>CPU burn</th>
+              <th>First optimization target</th>
+            </tr>
+          </thead>
+          <tbody>
+            $scheduler_regressions
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>Performance Optimization Loop</h2>
+          <p>Every architecture change is tied to parity, row-level evidence, and a rollback decision.</p>
+        </div>
+        <span class="tag">Decision gate</span>
+      </div>
+      <div class="arch-grid">
+        $optimization_loop
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>Native Resource Data Path</h2>
+          <p>The new resource lane replaces manifest-shaped YAML/CSV movement with typed Arrow record batches, Arrow IPC transport, and Parquet/Zstd persistence. These rows are data-format pressure evidence, not legacy C++ speedup claims.</p>
+        </div>
+        <span class="tag">No YAML/JSON hot path</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Format</th>
+              <th>Records</th>
+              <th>Rows/sec</th>
+              <th>Bytes/sec</th>
+              <th>p99 latency</th>
+              <th>Peak RSS</th>
+              <th>Boundary</th>
+            </tr>
+          </thead>
+          <tbody>
+            $resource_format_rows
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>Technology Fit</h2>
+          <p>These choices are constrained by the evidence path: use the right tool where it moves a measured bottleneck.</p>
+        </div>
+        <span class="tag">Architecture</span>
+      </div>
+      <div class="arch-grid">
+        $technology_fit
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
           <h2>Scheduler Evidence Status</h2>
           <p>The scheduler repo remains the focus. These cards show the parity base behind the performance table.</p>
         </div>
@@ -1587,6 +1775,10 @@ def render(evidence_dir: Path) -> str:
             io_comparison_rows,
         ),
         resource_cards=summary_cards(resource_summary, subject="Resources"),
+        scheduler_regressions=scheduler_regression_rows(rows),
+        optimization_loop=optimization_loop_section(),
+        resource_format_rows=resource_format_rows(resource_format_row_data),
+        technology_fit=technology_fit_section(),
         evidence_status_cards=evidence_status_cards(evidence_dir),
         architecture=architecture_section(),
         scheduler_story=scheduler_story_section(scheduler_gates),

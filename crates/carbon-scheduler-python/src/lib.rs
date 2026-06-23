@@ -29,7 +29,7 @@ use std::mem::{forget, ManuallyDrop};
 use std::ops::Deref;
 use std::os::raw::c_long;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::ThreadId;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -103,8 +103,11 @@ static ACTIVE_CHANNEL_OBJECTS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 static THREAD_RUN_QUEUES: Mutex<Vec<ThreadRunQueue>> = Mutex::new(Vec::new());
 static SCHEDULE_CALLBACK: Mutex<Option<PyObject>> = Mutex::new(None);
 static SCHEDULE_FAST_CALLBACK: Mutex<Option<ScheduleHookFunc>> = Mutex::new(None);
+static SCHEDULE_CALLBACK_PRESENT: AtomicBool = AtomicBool::new(false);
+static SCHEDULE_FAST_CALLBACK_PRESENT: AtomicBool = AtomicBool::new(false);
 static LAST_TIMEOUT_COMPLETED_TASKLETS: AtomicI32 = AtomicI32::new(0);
 static LAST_TIMEOUT_SWITCHED_TASKLETS: AtomicI32 = AtomicI32::new(0);
+static RUN_QUEUE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static BRIDGE_CORE_SCHEDULER: OnceLock<Mutex<CoreScheduler>> = OnceLock::new();
 const MIN_POSITIVE_RUN_TIMEOUT_NANOS: u128 = 10_000_000;
 
@@ -228,12 +231,50 @@ impl Drop for ThreadCleanupGuard {
     }
 }
 
+struct GreenletThreadCache {
+    greenlet_type: PyObject,
+    getcurrent: PyObject,
+    greenlet_exit: PyObject,
+}
+
+impl GreenletThreadCache {
+    fn new(py: Python<'_>) -> PyResult<Self> {
+        let module = PyModule::import_bound(py, "greenlet").map_err(|error| {
+            PyRuntimeError::new_err(format!(
+                "greenlet is required for scheduler continuation support: {error}"
+            ))
+        })?;
+        Ok(Self {
+            greenlet_type: module.getattr("greenlet")?.to_object(py),
+            getcurrent: module.getattr("getcurrent")?.to_object(py),
+            greenlet_exit: module.getattr("GreenletExit")?.to_object(py),
+        })
+    }
+
+    fn abandon_without_python(self) {
+        forget(self.greenlet_type);
+        forget(self.getcurrent);
+        forget(self.greenlet_exit);
+    }
+}
+
+impl GilDropValue for Option<GreenletThreadCache> {
+    fn abandon_without_python(self) {
+        if let Some(cache) = self {
+            cache.abandon_without_python();
+        }
+    }
+}
+
 thread_local! {
     static THREAD_CLEANUP_GUARD: ThreadCleanupGuard = ThreadCleanupGuard::new();
     static CURRENT_TASKLET: RefCell<Option<*mut ffi::PyObject>> = const { RefCell::new(None) };
     static SCHEDULE_MANAGER: GilDropRefCell<Option<ThreadScheduleManager>> = const { GilDropRefCell::new(None) };
     static EXECUTING_TASKLET: GilDropRefCell<Option<PyObject>> = const { GilDropRefCell::new(None) };
     static CHANNEL_CALLBACK: GilDropRefCell<Option<PyObject>> = const { GilDropRefCell::new(None) };
+    static CHANNEL_CALLBACK_TOUCHED: RefCell<bool> = const { RefCell::new(false) };
+    static GREENLET_CACHE: GilDropRefCell<Option<GreenletThreadCache>> = const { GilDropRefCell::new(None) };
+    static RUN_QUEUE_COUNT_CACHE: RefCell<Option<(u64, usize)>> = const { RefCell::new(None) };
     static TASKLET_CONTEXT_C_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -483,13 +524,13 @@ impl Tasklet {
     }
 
     fn sync_core_state(&self) {
-        bridge_core_sync_tasklet_runtime_state(
+        bridge_core_sync_tasklet_state(
             self.core_id,
             self.alive,
             self.paused,
             self.times_switched_to,
+            self.block_trap,
         );
-        bridge_core_set_tasklet_block_trap(self.core_id, self.block_trap);
     }
 
     fn core_snapshot(&self) -> PyResult<CoreTaskletSnapshot> {
@@ -1399,9 +1440,12 @@ impl Channel {
     }
 
     fn assert_core_mirror(&self) -> PyResult<()> {
-        let snapshot = self.core_snapshot()?;
-        debug_assert_eq!(snapshot.preference, i64::from(self.preference));
-        debug_assert_eq!(snapshot.balance, i64::from(self.balance));
+        #[cfg(debug_assertions)]
+        {
+            let snapshot = self.core_snapshot()?;
+            debug_assert_eq!(snapshot.preference, i64::from(self.preference));
+            debug_assert_eq!(snapshot.balance, i64::from(self.balance));
+        }
         Ok(())
     }
 
@@ -1979,6 +2023,9 @@ fn enable_softswitch(value: Option<PyObject>) -> PyResult<bool> {
 #[pyfunction]
 fn set_channel_callback(py: Python<'_>, callback: PyObject) -> PyResult<PyObject> {
     let callback = validated_callback_replacement(py, callback)?;
+    CHANNEL_CALLBACK_TOUCHED.with(|touched| {
+        *touched.borrow_mut() = true;
+    });
     CHANNEL_CALLBACK.with(|slot| {
         let mut slot = slot.borrow_mut();
         let previous = slot.take().unwrap_or_else(|| py.None());
@@ -2225,6 +2272,9 @@ fn call_channel_callback(
     sending: bool,
     will_block: bool,
 ) -> PyResult<()> {
+    if !CHANNEL_CALLBACK_TOUCHED.with(|touched| *touched.borrow()) {
+        return Ok(());
+    }
     if let Ok(tasklet_ref) = tasklet.bind(py).downcast::<Tasklet>() {
         if let Ok(mut tasklet_ref) = tasklet_ref.try_borrow_mut() {
             if tasklet_ref.skip_next_channel_callback {
@@ -2252,7 +2302,7 @@ fn send_channel_message(
             .map_err(|_| PyTypeError::new_err("expected scheduler.channel"))?;
         let channel = channel.try_borrow()?;
         channel.ensure_valid()?;
-        channel.core_snapshot()?.blocked_receivers.is_empty()
+        channel.blocked_receivers.is_empty()
     };
     let current = current_tasklet_object(py)?;
     let current_core_id = tasklet_core_id(py, &current)?;
@@ -2267,8 +2317,7 @@ fn send_channel_message(
     channel.register_object_ptr(channel_object.as_ptr());
     let channel_core_id = channel.core_channel_id()?;
 
-    let snapshot = channel.core_snapshot()?;
-    if !snapshot.blocked_receivers.is_empty() {
+    if !channel.blocked_receivers.is_empty() {
         let (receiver, receiver_runs_immediately) =
             match bridge_core_send(current_core_id, channel_core_id)? {
                 CoreChannelOperationResult::Matched {
@@ -2359,7 +2408,7 @@ fn send_channel_message(
     let mut channel = channel.try_borrow_mut()?;
     channel.ensure_valid()?;
     let channel_core_id = channel.core_channel_id()?;
-    if channel.core_snapshot()?.blocked_receivers.is_empty() {
+    if channel.blocked_receivers.is_empty() {
         return Err(PyRuntimeError::new_err(
             "Deadlock: channel send would block",
         ));
@@ -2413,10 +2462,9 @@ fn run_sender_preferred_receiver_before_receive(
             .map_err(|_| PyTypeError::new_err("expected scheduler.channel"))?;
         let channel = channel.try_borrow()?;
         channel.ensure_valid()?;
-        let snapshot = channel.core_snapshot()?;
-        snapshot.preference >= 1
+        channel.preference >= 1
             && !channel.messages.is_empty()
-            && snapshot.blocked_senders.is_empty()
+            && channel.blocked_senders.is_empty()
     };
 
     if should_run_receiver {
@@ -2435,7 +2483,7 @@ fn receive_channel_message(py: Python<'_>, channel_object: PyObject) -> PyResult
             .map_err(|_| PyTypeError::new_err("expected scheduler.channel"))?;
         let channel = channel.try_borrow()?;
         channel.ensure_valid()?;
-        channel.core_snapshot()?.blocked_senders.is_empty() && channel.messages.is_empty()
+        channel.blocked_senders.is_empty() && channel.messages.is_empty()
     };
     let current = current_tasklet_object(py)?;
     let current_core_id = tasklet_core_id(py, &current)?;
@@ -2457,7 +2505,7 @@ fn receive_channel_message(py: Python<'_>, channel_object: PyObject) -> PyResult
 
     if let Some(message) = channel.messages.pop_front() {
         let mut sender_to_continue = None;
-        if !channel.core_snapshot()?.blocked_senders.is_empty() {
+        if !channel.blocked_senders.is_empty() {
             match bridge_core_receive(current_core_id, channel_core_id)? {
                 CoreChannelOperationResult::Matched {
                     sender,
@@ -2547,7 +2595,7 @@ fn receive_channel_message(py: Python<'_>, channel_object: PyObject) -> PyResult
             ));
         };
         let mut sender_to_continue = None;
-        if !channel.core_snapshot()?.blocked_senders.is_empty() {
+        if !channel.blocked_senders.is_empty() {
             match bridge_core_receive(current_core_id, channel_core_id)? {
                 CoreChannelOperationResult::Matched {
                     sender,
@@ -2598,7 +2646,7 @@ fn receive_channel_message(py: Python<'_>, channel_object: PyObject) -> PyResult
         ));
     };
     let mut sender_to_continue = None;
-    if !channel.core_snapshot()?.blocked_senders.is_empty() {
+    if !channel.blocked_senders.is_empty() {
         match bridge_core_receive(current_core_id, channel_core_id)? {
             CoreChannelOperationResult::Matched {
                 sender,
@@ -3148,16 +3196,18 @@ fn bridge_core_set_tasklet_block_trap(tasklet: CoreTaskletId, value: bool) {
     let _ = scheduler.set_tasklet_block_trap(tasklet, value);
 }
 
-fn bridge_core_sync_tasklet_runtime_state(
+fn bridge_core_sync_tasklet_state(
     tasklet: CoreTaskletId,
     alive: bool,
     paused: bool,
     times_switched_to: u64,
+    block_trap: bool,
 ) {
     let mut scheduler = bridge_core_scheduler()
         .lock()
         .expect("scheduler core bridge lock poisoned");
     let _ = scheduler.update_tasklet_runtime_state(tasklet, alive, paused, times_switched_to);
+    let _ = scheduler.set_tasklet_block_trap(tasklet, block_trap);
 }
 
 fn bridge_core_pause_tasklet(tasklet: CoreTaskletId) {
@@ -3197,14 +3247,6 @@ fn bridge_core_remove_runnable_tasklet(tasklet: CoreTaskletId) {
 
 fn bridge_core_pop_next_runnable_tasklet(queue: CoreRunQueueId) -> PyResult<Option<CoreTaskletId>> {
     with_bridge_core(|scheduler| scheduler.pop_next_runnable_tasklet(queue))
-}
-
-fn bridge_core_runnable_tasklet_count(queue: CoreRunQueueId) -> usize {
-    bridge_core_scheduler()
-        .lock()
-        .expect("scheduler core bridge lock poisoned")
-        .runnable_tasklet_count(queue)
-        .unwrap_or(0)
 }
 
 fn bridge_core_clear_run_queue(queue: CoreRunQueueId) -> PyResult<Vec<CoreTaskletId>> {
@@ -3293,6 +3335,34 @@ fn thread_run_queue_index(queues: &[ThreadRunQueue], thread_id: ThreadId) -> Opt
     queues.iter().position(|entry| entry.thread_id == thread_id)
 }
 
+fn cached_run_queue_count(generation: u64) -> Option<usize> {
+    RUN_QUEUE_COUNT_CACHE.with(|cache| {
+        cache.borrow().and_then(|(cached_generation, count)| {
+            (cached_generation == generation).then_some(count)
+        })
+    })
+}
+
+fn set_cached_run_queue_count(generation: u64, count: usize) {
+    RUN_QUEUE_COUNT_CACHE.with(|cache| {
+        *cache.borrow_mut() = Some((generation, count));
+    });
+}
+
+fn current_queue_len_from_locked(queues: &[ThreadRunQueue], thread_id: ThreadId) -> usize {
+    queues
+        .iter()
+        .find(|entry| entry.thread_id == thread_id)
+        .map_or(0, |entry| entry.queue.len())
+}
+
+fn publish_run_queue_count_change(thread_id: ThreadId, count: usize) {
+    let generation = RUN_QUEUE_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    if thread_id == current_thread_id() {
+        set_cached_run_queue_count(generation, count);
+    }
+}
+
 fn current_thread_core_run_queue_id(create: bool) -> Option<CoreRunQueueId> {
     let thread_id = current_thread_id();
     let mut queues = THREAD_RUN_QUEUES
@@ -3311,6 +3381,7 @@ fn current_thread_core_run_queue_id(create: bool) -> Option<CoreRunQueueId> {
         queue: VecDeque::new(),
         queued_ids: HashSet::new(),
     });
+    publish_run_queue_count_change(thread_id, 0);
     Some(core_queue_id)
 }
 
@@ -3394,6 +3465,7 @@ fn queue_tasklet_core_for_thread(
     core_id: CoreTaskletId,
     tasklet_object: PyObject,
 ) -> PyResult<()> {
+    let resulting_len;
     let mut queues = THREAD_RUN_QUEUES
         .lock()
         .expect("thread run queue lock poisoned");
@@ -3401,6 +3473,7 @@ fn queue_tasklet_core_for_thread(
         let entry = &mut queues[index];
         move_or_push_queued_tasklet(entry, core_id, tasklet_object);
         bridge_core_schedule_tasklet_back(entry.core_queue_id, core_id)?;
+        resulting_len = entry.queue.len();
     } else {
         let mut queue = VecDeque::new();
         queue.push_back(QueuedTasklet {
@@ -3411,6 +3484,7 @@ fn queue_tasklet_core_for_thread(
         queued_ids.insert(core_id);
         let core_queue_id = bridge_core_create_run_queue();
         bridge_core_schedule_tasklet_back(core_queue_id, core_id)?;
+        resulting_len = queue.len();
         queues.push(ThreadRunQueue {
             thread_id,
             core_queue_id,
@@ -3418,6 +3492,8 @@ fn queue_tasklet_core_for_thread(
             queued_ids,
         });
     }
+    drop(queues);
+    publish_run_queue_count_change(thread_id, resulting_len);
     Ok(())
 }
 
@@ -3436,30 +3512,40 @@ fn pop_current_queued_tasklet(_py: Python<'_>) -> PyResult<Option<PyObject>> {
     };
     let entry = &mut queues[index];
     let Some(core_id) = bridge_core_pop_next_runnable_tasklet(entry.core_queue_id)? else {
+        let remaining = entry.queue.len();
         if entry.queue.is_empty() {
             queues.remove(index);
         }
+        drop(queues);
+        publish_run_queue_count_change(thread_id, remaining);
         return Ok(None);
     };
     let tasklet = pop_tasklet_object_by_core_id(entry, core_id).ok_or_else(|| {
         PyRuntimeError::new_err("scheduler core run queue selected a missing Python tasklet")
     })?;
+    let remaining = entry.queue.len();
     if entry.queue.is_empty() {
         queues.remove(index);
     }
+    drop(queues);
+    publish_run_queue_count_change(thread_id, remaining);
     Ok(Some(tasklet))
 }
 
 fn queued_tasklet_count() -> usize {
     let thread_id = current_thread_id();
-    THREAD_RUN_QUEUES
+    let generation = RUN_QUEUE_GENERATION.load(Ordering::Acquire);
+    if let Some(count) = cached_run_queue_count(generation) {
+        return count;
+    }
+    let count = THREAD_RUN_QUEUES
         .lock()
         .expect("thread run queue lock poisoned")
         .iter()
         .find(|entry| entry.thread_id == thread_id)
-        .map_or(0, |entry| {
-            bridge_core_runnable_tasklet_count(entry.core_queue_id)
-        })
+        .map_or(0, |entry| entry.queue.len());
+    set_cached_run_queue_count(generation, count);
+    count
 }
 
 fn executing_tasklet_count() -> usize {
@@ -3467,6 +3553,7 @@ fn executing_tasklet_count() -> usize {
 }
 
 fn remove_queued_tasklet_by_core_id(core_id: CoreTaskletId, target: *mut ffi::PyObject) {
+    let thread_id = current_thread_id();
     bridge_core_remove_runnable_tasklet(core_id);
     let mut queues = THREAD_RUN_QUEUES
         .lock()
@@ -3475,6 +3562,9 @@ fn remove_queued_tasklet_by_core_id(core_id: CoreTaskletId, target: *mut ffi::Py
         remove_tasklet_object_by_ptr(entry, target);
     }
     queues.retain(|entry| !entry.queue.is_empty());
+    let current_len = current_queue_len_from_locked(&queues, thread_id);
+    drop(queues);
+    publish_run_queue_count_change(thread_id, current_len);
 }
 
 fn remove_queued_tasklet(py: Python<'_>, target: *mut ffi::PyObject) {
@@ -3484,6 +3574,7 @@ fn remove_queued_tasklet(py: Python<'_>, target: *mut ffi::PyObject) {
             return;
         }
     }
+    let thread_id = current_thread_id();
     let mut queues = THREAD_RUN_QUEUES
         .lock()
         .expect("thread run queue lock poisoned");
@@ -3491,6 +3582,9 @@ fn remove_queued_tasklet(py: Python<'_>, target: *mut ffi::PyObject) {
         remove_tasklet_object_by_ptr(entry, target);
     }
     queues.retain(|entry| !entry.queue.is_empty());
+    let current_len = current_queue_len_from_locked(&queues, thread_id);
+    drop(queues);
+    publish_run_queue_count_change(thread_id, current_len);
 }
 
 fn take_thread_run_queue(_py: Python<'_>, thread_id: ThreadId) -> PyResult<Vec<PyObject>> {
@@ -3506,6 +3600,8 @@ fn take_thread_run_queue(_py: Python<'_>, thread_id: ThreadId) -> PyResult<Vec<P
                 tasklets.push(tasklet);
             }
         }
+        drop(queues);
+        publish_run_queue_count_change(thread_id, 0);
         Ok(tasklets)
     } else {
         Ok(Vec::new())
@@ -3537,11 +3633,13 @@ fn executing_tasklet(py: Python<'_>) -> Option<PyObject> {
 }
 
 fn replace_schedule_callback(py: Python<'_>, callback: Option<PyObject>) -> PyObject {
+    let callback_present = callback.is_some();
     let mut slot = SCHEDULE_CALLBACK
         .lock()
         .expect("schedule callback lock poisoned");
     let previous = slot.take().unwrap_or_else(|| py.None());
     *slot = callback;
+    SCHEDULE_CALLBACK_PRESENT.store(callback_present, Ordering::Release);
     previous
 }
 
@@ -3554,14 +3652,18 @@ fn schedule_callback(py: Python<'_>) -> Option<PyObject> {
 }
 
 fn call_schedule_callback(py: Python<'_>, previous: &PyObject, next: &PyObject) -> PyResult<()> {
-    if let Some(callback) = schedule_callback(py) {
-        callback.call1(py, (previous, next))?;
+    if SCHEDULE_CALLBACK_PRESENT.load(Ordering::Acquire) {
+        if let Some(callback) = schedule_callback(py) {
+            callback.call1(py, (previous, next))?;
+        }
     }
-    if let Some(callback) = *SCHEDULE_FAST_CALLBACK
-        .lock()
-        .expect("schedule fast callback lock poisoned")
-    {
-        callback(previous.as_ptr(), next.as_ptr());
+    if SCHEDULE_FAST_CALLBACK_PRESENT.load(Ordering::Acquire) {
+        if let Some(callback) = *SCHEDULE_FAST_CALLBACK
+            .lock()
+            .expect("schedule fast callback lock poisoned")
+        {
+            callback(previous.as_ptr(), next.as_ptr());
+        }
     }
     Ok(())
 }
@@ -3573,19 +3675,38 @@ fn current_tasklet_object(py: Python<'_>) -> PyResult<PyObject> {
     Ok(current_tasklet(py)?.to_object(py))
 }
 
-fn greenlet_module<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyModule>> {
-    PyModule::import_bound(py, "greenlet").map_err(|error| {
-        PyRuntimeError::new_err(format!(
-            "greenlet is required for scheduler continuation support: {error}"
-        ))
+fn cached_greenlet_object(
+    py: Python<'_>,
+    selector: impl FnOnce(&GreenletThreadCache) -> &PyObject,
+) -> PyResult<PyObject> {
+    GREENLET_CACHE.with(|cell| {
+        if cell.borrow().is_none() {
+            *cell.borrow_mut() = Some(GreenletThreadCache::new(py)?);
+        }
+        let cache = cell.borrow();
+        Ok(selector(
+            cache
+                .as_ref()
+                .expect("greenlet thread cache should be initialized"),
+        )
+        .clone_ref(py))
     })
 }
 
+fn greenlet_type_object(py: Python<'_>) -> PyResult<PyObject> {
+    cached_greenlet_object(py, |cache| &cache.greenlet_type)
+}
+
+fn greenlet_getcurrent_object(py: Python<'_>) -> PyResult<PyObject> {
+    cached_greenlet_object(py, |cache| &cache.getcurrent)
+}
+
+fn greenlet_exit_object(py: Python<'_>) -> PyResult<PyObject> {
+    cached_greenlet_object(py, |cache| &cache.greenlet_exit)
+}
+
 fn current_raw_greenlet(py: Python<'_>) -> PyResult<PyObject> {
-    Ok(greenlet_module(py)?
-        .getattr("getcurrent")?
-        .call0()?
-        .to_object(py))
+    greenlet_getcurrent_object(py)?.call0(py)
 }
 
 fn greenlet_is_dead(py: Python<'_>, greenlet: &PyObject) -> PyResult<bool> {
@@ -3606,9 +3727,7 @@ fn detach_tasklet_greenlet_runner(py: Python<'_>, greenlet: &PyObject) {
 
 fn dispose_tasklet_greenlet(py: Python<'_>, greenlet: &PyObject) {
     if !greenlet_is_dead(py, greenlet).unwrap_or(true) {
-        if let Ok(greenlet_exit) =
-            greenlet_module(py).and_then(|module| module.getattr("GreenletExit"))
-        {
+        if let Ok(greenlet_exit) = greenlet_exit_object(py) {
             if let Ok(throw) = greenlet.bind(py).getattr("throw") {
                 let _ = throw.call1((greenlet_exit,));
             }
@@ -3652,8 +3771,7 @@ fn ensure_tasklet_greenlet(py: Python<'_>, tasklet_object: &PyObject) -> PyResul
         },
     )?
     .to_object(py);
-    let greenlet_type = greenlet_module(py)?.getattr("greenlet")?;
-    let greenlet = greenlet_type.call1((runner,))?.to_object(py);
+    let greenlet = greenlet_type_object(py)?.call1(py, (runner,))?;
     let tasklet = tasklet_object
         .bind(py)
         .downcast::<Tasklet>()
@@ -4965,6 +5083,9 @@ extern "C" fn c_api_py_scheduler_set_channel_callback(callback: *mut ffi::PyObje
                 }
             }
         };
+        CHANNEL_CALLBACK_TOUCHED.with(|touched| {
+            *touched.borrow_mut() = true;
+        });
         CHANNEL_CALLBACK.with(|slot| *slot.borrow_mut() = replacement);
         0
     })
@@ -4994,6 +5115,7 @@ extern "C" fn c_api_py_scheduler_set_schedule_callback(callback: *mut ffi::PyObj
 }
 
 extern "C" fn c_api_py_scheduler_set_schedule_fast_callback(callback: Option<ScheduleHookFunc>) {
+    SCHEDULE_FAST_CALLBACK_PRESENT.store(callback.is_some(), Ordering::Release);
     *SCHEDULE_FAST_CALLBACK
         .lock()
         .expect("schedule fast callback lock poisoned") = callback;

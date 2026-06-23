@@ -1,126 +1,97 @@
-# CarbonEngine Performance Dashboard Plan
+# Carbon Performance Dashboard And Optimization Plan
 
 ## Purpose
 
-Build an evidence dashboard that compares current CarbonEngine C++ behavior against Rust prototypes under original-use stress workloads. The dashboard must make correctness visible first; speedups are only valid when the matching parity gate passes.
+Build an evidence dashboard and benchmark loop that make correctness visible
+before performance claims. The scheduler rewrite must robustly beat the legacy
+C++ scheduler on matched workloads, while the resource pipeline gets a second
+native data path based on Arrow record batches, Arrow IPC, and Parquet/Zstd
+instead of moving YAML/CSV/JSON-like manifests through the hot path.
 
-## First View
+## Current Evidence Snapshot
 
-The first viewport should be a dense benchmark console:
+- Scheduler semantic parity is green for the current lab rows, but performance
+  is not: the Rust scheduler bridge is slower on every matched quick workload.
+- The first optimization targets are fanout pipeline, fake zone tick tail
+  latency, channel rendezvous, and runnable queue pressure.
+- Resource CLI rows are useful local evidence, but speedup language is gated by
+  optimized legacy-baseline selection and release-native Rust metadata.
+- The native resource format lane now has concrete `ResourceCatalog` Arrow IPC
+  and Parquet/Zstd round-trip support; broader bundle/patch metadata migration
+  remains follow-up work.
 
-- Executive strip: tests passing, parity passing, best speedup, biggest bottleneck.
-- Workload tabs: `resources`, `scheduler`, later `io`.
-- Side-by-side C++ vs Rust bars for throughput, latency, memory, and CPU.
-- Stress controls: file count, total bytes, chunk size, patch delta size, tasklet count, channel contention.
-- Run metadata: repo SHA, build profile, compiler, rustc, CMake, host, command.
+## Dashboard Requirements
 
-## Workloads
+- Show scheduler parity, current speed ratio, p99 tail, CPU, and RSS first.
+- Show a regression table sorted worst-first, including the likely first
+  optimization target for each scheduler row.
+- Show the performance loop: parity, hypothesis, implementation, benchmark,
+  decision, and rollback.
+- Show resource results separately from scheduler results.
+- Show native resource format rows separately from legacy YAML/CSV-compatible
+  CLI rows.
+- Suppress broad speedup claims unless each row has passing parity, release-
+  native Rust, debug assertions off, target-cpu native, and a known non-debug
+  legacy baseline.
 
-`resources`:
+## Scheduler Optimization Loop
 
-- resource group YAML import/export
-- legacy CSV import/export
-- create bundle
-- unpack bundle
-- create patch
-- apply patch
-- chunk index generation
-- MD5/FNV checksums
-- gzip compress/decompress
-- legacy filter matching
-- create resource group from directory
-- CLI end-to-end flows
+The robust-win gate is:
 
-`scheduler`:
+- zero semantic mismatches;
+- at least `1.20x` median scheduler throughput on quick matched rows;
+- no quick scheduler row below `1.0x`;
+- Rust p99 no worse than legacy p99;
+- at least ten native samples per row for shareable scheduler comparison evidence.
 
-- tasklet switch throughput
-- channel send/receive latency
-- blocking/unblocking
-- exception delivery
-- callback dispatch
-- multi-thread cleanup
-- C API capsule smoke tests
+Optimize in this order:
 
-## Benchmark JSON
+1. Fanout pipeline: batch wakeups, reduce Python bridge touches, and profile
+   allocation/refcount churn.
+2. Zone tick: separate dense entity work from scheduler dispatch; test scalar
+   Rust snapshots before Rayon/SIMD.
+3. Channel rendezvous: replace queue scans with ID-linked O(1) wait queues.
+4. Runnable tasklets: replace `BTreeMap`/`VecDeque` scans with dense tasklet
+   storage and known-tasklet O(1) removal.
 
-Each benchmark runner should emit one JSON document per run:
+Each experiment must name the affected compatibility surface, benchmark rows,
+expected win, rollback path, and required parity command.
 
-```json
-{
-  "schema_version": 1,
-  "component": "resources",
-  "workload": "create_patch",
-  "implementation": "cpp",
-  "repo": "carbonengine/resources",
-  "commit": "77d0867388370a31a2f78b9f2ddbcd23deec8bc1",
-  "build_profile": "debug",
-  "host": {
-    "os": "linux",
-    "cpu": "unknown",
-    "ram_bytes": 0
-  },
-  "parameters": {
-    "file_count": 1000,
-    "total_bytes": 1073741824,
-    "chunk_size": 1048576,
-    "patch_delta_percent": 5
-  },
-  "correctness": {
-    "parity_status": "pass",
-    "test_command": "ctest --test-dir .cmake-build-linux-vcpkg-probe --output-on-failure",
-    "tests_passed": 121,
-    "tests_failed": 0
-  },
-  "metrics": {
-    "duration_ms": 0,
-    "throughput_bytes_per_sec": 0,
-    "latency_p50_ms": 0,
-    "latency_p95_ms": 0,
-    "latency_p99_ms": 0,
-    "peak_rss_bytes": 0,
-    "cpu_user_ms": 0,
-    "cpu_system_ms": 0
-  }
-}
-```
+## Native Resource Data Path
 
-Dashboard rule:
+The compatibility path remains legacy YAML/CSV at the boundary. The native path
+must not use YAML or JSON as intermediate data movement.
 
-- If `correctness.parity_status != "pass"`, render charts in a warning state and suppress speedup badges.
+Implemented first:
 
-## Implementation Phases
+- `ResourceCatalog` to Arrow `RecordBatch`;
+- Arrow IPC byte round-trip;
+- Parquet/Zstd byte round-trip;
+- scalability rows for `catalog-arrow-ipc-roundtrip` and
+  `catalog-parquet-roundtrip`.
 
-Phase 1: static dashboard.
+Next resource work:
 
-- Add fixture JSON for one C++ `resources` run and placeholder Rust prototype runs.
-- Build a Vite/React app that loads local JSON only.
-- Add Playwright screenshots for desktop and compact widths.
+- extend the same columnar model to bundle metadata and patch metadata;
+- add file-backed CLI flags for `--resource-backend legacy|arrow-ipc|parquet`;
+- benchmark legacy path, one-boundary-conversion path, and fully native
+  columnar path separately;
+- compare row throughput, bytes/sec, p99 latency, CPU burn, peak RSS, and
+  semantic parity.
 
-Phase 2: benchmark runners.
+## Technology Fit
 
-- Initial samples are available from `cargo run -p xtask -- bench`, but they are not final broad speedup evidence. Current rows cover scheduler fixture execution, resource MD5, resource gzip, resource filter matching, and preliminary parity-checked create-group, create-group-from-filter, merge-group, diff-group, and remove-resources legacy CLI/Rust process comparisons.
-- Wrap existing C++ CLI/library flows with timing and resource collection.
-- Emit JSON from repeatable commands.
-- Add Rust prototype runners with the same schema.
-
-Phase 3: executive comparison.
-
-- Add historical run comparison by commit.
-- Add stress scale curves.
-- Add bottleneck callouts generated from p95 latency, peak RSS, and throughput regressions.
-
-## Parallel Workstreams
-
-- Agent A: benchmark schema and C++ `resources` runner.
-- Agent B: Rust prototype runner for matching `resources` workloads.
-- Agent C: dashboard UI and static fixture ingestion.
-- Agent D: scheduler workload definitions and Windows/macOS runner plan.
-- Agent E: CI artifact publishing for JSON and screenshots.
+- Arrow IPC: native resource transport, parity batches, offline trace batches.
+- Parquet/Zstd: persisted resource catalog snapshots and long-lived evidence.
+- Rayon: pure Rust dense-data work only, after scalar Rust baselines pass.
+- SIMD: profiled dense kernels only; not runnable FIFO or channel control flow.
+- Tokio: future local reactor experiments only; not tasklet scheduling.
+- Proto: compact control frames only if Arrow IPC is the wrong fit.
 
 ## Acceptance Gates
 
-- Dashboard loads without a backend.
-- A failed parity run visibly blocks speedup claims.
-- At least one `resources` workload compares C++ and Rust JSON.
-- Playwright validates no blank charts and no overlapping UI at desktop and compact widths.
-- Every chart links back to the command and commit that produced the data.
+- `cargo test -p carbon-resources-core resource_catalog_` passes.
+- `cargo run -p xtask -- bench-scalability-worker data catalog-arrow-ipc-roundtrip 10 2` passes.
+- `cargo run -p xtask -- bench-scalability-worker data catalog-parquet-roundtrip 10 2` passes.
+- `scripts/render-blog-report.py` renders the scheduler regression, native
+  resource format, optimization loop, and technology-fit sections.
