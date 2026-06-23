@@ -61,8 +61,9 @@ workspace has these useful pieces:
   containment.
 - `carbon-scheduler-python` mirrors live Python tasklet/channel operations into
   the Rust core, uses core IDs for selected channel/run-queue ordering paths,
-  and reads public tasklet lifecycle/scheduling properties from core snapshots.
-- The Python bridge test suite is locally green at `55/55` tests.
+  and reads public tasklet/channel lifecycle and public state properties from
+  core snapshots.
+- The Python bridge test suite is locally green at `56/56` tests.
 - The core/trace/FFI tests are locally green at `13/13`, `3/3`, and `1/1`
   respectively.
 - `cargo run -p xtask -- rust-scheduler-python` records the PyO3 bridge as a

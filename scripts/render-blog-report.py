@@ -762,7 +762,7 @@ def performance_breakdown_cards(
             metric_card(
                 "Worst scheduler p99",
                 fmt_us(pressure_summary.get("worst_latency_p99_us")),
-                f"Rust-only pressure matrix; p99.9 {fmt_us(pressure_summary.get('worst_latency_p99_9_us'))}",
+                f"Supplemental core-only pressure matrix; p99.9 {fmt_us(pressure_summary.get('worst_latency_p99_9_us'))}",
             ),
             metric_card(
                 "Pressure memory",
@@ -1350,7 +1350,7 @@ def render(evidence_dir: Path) -> str:
     <div class="hero">
       <p class="eyebrow">Carbon scheduler rewrite evidence</p>
       <h1>Carbon scheduler parity is green in the lab; performance work remains.</h1>
-      <p class="lead">This report is scheduler-first. It compares matched pressure rows for the legacy C++ scheduler extension and the Rust scheduler bridge through the same Python tasklet/channel API, then separates resource-tool wins and Rust-only pressure evidence so the claims stay clear.</p>
+      <p class="lead">This report is scheduler-first. It compares matched pressure rows for the legacy C++ scheduler extension and the Rust scheduler bridge through the same Python tasklet/channel API, then keeps supplemental Rust-core-only pressure evidence separate.</p>
       <div class="metric-grid">
         $top_line_cards
       </div>
@@ -1511,10 +1511,10 @@ def render(evidence_dir: Path) -> str:
     <section>
       <div class="section-head">
         <div>
-          <h2>Rust-Only Pressure</h2>
-          <p>Rust scheduler-core pressure evidence only. These rows show scaling shape and tail behavior, not old-vs-Rust speedups.</p>
+          <h2>Supplemental Core Pressure</h2>
+          <p>Rust scheduler-core evidence only. These rows are kept for scaling shape and tail behavior, but they are not old-vs-Rust speedups.</p>
         </div>
-        <span class="tag">Rust-only pressure</span>
+        <span class="tag">Not comparable</span>
       </div>
       <div class="table-wrap">
         <table>

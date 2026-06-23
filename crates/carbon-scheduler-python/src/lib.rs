@@ -23,7 +23,7 @@ use pyo3::types::{PyAny, PyBool, PyDict, PyLong, PyString, PyTuple, PyType};
 use pyo3::AsPyPointer;
 use pyo3::PyTraverseError;
 use std::cell::{RefCell, UnsafeCell};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::ffi::{c_char, c_void};
 use std::mem::{forget, ManuallyDrop};
 use std::ops::Deref;
@@ -113,7 +113,13 @@ type ScheduleHookFunc = extern "C" fn(*mut ffi::PyObject, *mut ffi::PyObject) ->
 struct ThreadRunQueue {
     thread_id: ThreadId,
     core_queue_id: CoreRunQueueId,
-    queue: VecDeque<PyObject>,
+    queue: VecDeque<QueuedTasklet>,
+    queued_ids: HashSet<CoreTaskletId>,
+}
+
+struct QueuedTasklet {
+    core_id: CoreTaskletId,
+    object: PyObject,
 }
 
 trait GilDropValue: Default {
@@ -1380,6 +1386,12 @@ impl Channel {
             .map_err(|_| PyRuntimeError::new_err("scheduler channel balance overflowed i32"))
     }
 
+    fn core_preference(&self) -> PyResult<i32> {
+        let snapshot = self.core_snapshot()?;
+        i32::try_from(snapshot.preference)
+            .map_err(|_| PyRuntimeError::new_err("scheduler channel preference overflowed i32"))
+    }
+
     fn set_balance_from_core(&mut self, balance: i64) -> PyResult<()> {
         self.balance = i32::try_from(balance)
             .map_err(|_| PyRuntimeError::new_err("scheduler channel balance overflowed i32"))?;
@@ -1553,7 +1565,7 @@ impl Channel {
     #[getter]
     fn preference(&self) -> PyResult<i32> {
         self.ensure_valid()?;
-        Ok(self.preference)
+        self.core_preference()
     }
 
     #[setter]
@@ -1635,13 +1647,13 @@ impl Channel {
     #[getter]
     fn closed(&self) -> PyResult<bool> {
         self.ensure_valid()?;
-        Ok(self.closed)
+        Ok(self.core_snapshot()?.closed)
     }
 
     #[getter]
     fn closing(&self) -> PyResult<bool> {
         self.ensure_valid()?;
-        Ok(self.closing)
+        Ok(self.core_snapshot()?.closing)
     }
 
     #[pyo3(signature = (*args))]
@@ -3297,19 +3309,74 @@ fn current_thread_core_run_queue_id(create: bool) -> Option<CoreRunQueueId> {
         thread_id,
         core_queue_id,
         queue: VecDeque::new(),
+        queued_ids: HashSet::new(),
     });
     Some(core_queue_id)
 }
 
-fn tasklet_object_by_core_id(
-    py: Python<'_>,
-    queue: &mut VecDeque<PyObject>,
+fn pop_tasklet_object_by_core_id(
+    queue: &mut ThreadRunQueue,
     core_id: CoreTaskletId,
 ) -> Option<PyObject> {
-    queue
+    let tasklet = if queue
+        .queue
+        .front()
+        .is_some_and(|entry| entry.core_id == core_id)
+    {
+        queue.queue.pop_front()
+    } else {
+        queue
+            .queue
+            .iter()
+            .position(|entry| entry.core_id == core_id)
+            .and_then(|index| queue.queue.remove(index))
+    }?;
+    queue.queued_ids.remove(&core_id);
+    Some(tasklet.object)
+}
+
+fn remove_tasklet_object_by_ptr(queue: &mut ThreadRunQueue, target: *mut ffi::PyObject) {
+    let mut retained = VecDeque::with_capacity(queue.queue.len());
+    while let Some(tasklet) = queue.queue.pop_front() {
+        if tasklet.object.as_ptr() == target {
+            queue.queued_ids.remove(&tasklet.core_id);
+        } else {
+            retained.push_back(tasklet);
+        }
+    }
+    queue.queue = retained;
+}
+
+fn move_or_push_queued_tasklet(
+    queue: &mut ThreadRunQueue,
+    core_id: CoreTaskletId,
+    tasklet_object: PyObject,
+) {
+    if queue.queued_ids.insert(core_id) {
+        queue.queue.push_back(QueuedTasklet {
+            core_id,
+            object: tasklet_object,
+        });
+        return;
+    }
+
+    if let Some(index) = queue
+        .queue
         .iter()
-        .position(|candidate| tasklet_core_id(py, candidate).ok() == Some(core_id))
-        .and_then(|index| queue.remove(index))
+        .position(|entry| entry.core_id == core_id)
+    {
+        let mut tasklet = queue
+            .queue
+            .remove(index)
+            .expect("queued tasklet index should be valid");
+        tasklet.object = tasklet_object;
+        queue.queue.push_back(tasklet);
+    } else {
+        queue.queue.push_back(QueuedTasklet {
+            core_id,
+            object: tasklet_object,
+        });
+    }
 }
 
 fn queue_tasklet_for_thread(
@@ -3322,7 +3389,7 @@ fn queue_tasklet_for_thread(
 }
 
 fn queue_tasklet_core_for_thread(
-    py: Python<'_>,
+    _py: Python<'_>,
     thread_id: ThreadId,
     core_id: CoreTaskletId,
     tasklet_object: PyObject,
@@ -3332,23 +3399,23 @@ fn queue_tasklet_core_for_thread(
         .expect("thread run queue lock poisoned");
     if let Some(index) = thread_run_queue_index(&queues, thread_id) {
         let entry = &mut queues[index];
-        if !entry
-            .queue
-            .iter()
-            .any(|candidate| tasklet_core_id(py, candidate).ok() == Some(core_id))
-        {
-            entry.queue.push_back(tasklet_object);
-        }
+        move_or_push_queued_tasklet(entry, core_id, tasklet_object);
         bridge_core_schedule_tasklet_back(entry.core_queue_id, core_id)?;
     } else {
         let mut queue = VecDeque::new();
-        queue.push_back(tasklet_object);
+        queue.push_back(QueuedTasklet {
+            core_id,
+            object: tasklet_object,
+        });
+        let mut queued_ids = HashSet::new();
+        queued_ids.insert(core_id);
         let core_queue_id = bridge_core_create_run_queue();
         bridge_core_schedule_tasklet_back(core_queue_id, core_id)?;
         queues.push(ThreadRunQueue {
             thread_id,
             core_queue_id,
             queue,
+            queued_ids,
         });
     }
     Ok(())
@@ -3359,7 +3426,7 @@ fn queue_tasklet_for_owner(py: Python<'_>, tasklet_object: &PyObject) -> PyResul
     queue_tasklet_for_thread(py, owner_thread, tasklet_object.clone_ref(py))
 }
 
-fn pop_current_queued_tasklet(py: Python<'_>) -> PyResult<Option<PyObject>> {
+fn pop_current_queued_tasklet(_py: Python<'_>) -> PyResult<Option<PyObject>> {
     let thread_id = current_thread_id();
     let mut queues = THREAD_RUN_QUEUES
         .lock()
@@ -3374,7 +3441,7 @@ fn pop_current_queued_tasklet(py: Python<'_>) -> PyResult<Option<PyObject>> {
         }
         return Ok(None);
     };
-    let tasklet = tasklet_object_by_core_id(py, &mut entry.queue, core_id).ok_or_else(|| {
+    let tasklet = pop_tasklet_object_by_core_id(entry, core_id).ok_or_else(|| {
         PyRuntimeError::new_err("scheduler core run queue selected a missing Python tasklet")
     })?;
     if entry.queue.is_empty() {
@@ -3405,7 +3472,7 @@ fn remove_queued_tasklet_by_core_id(core_id: CoreTaskletId, target: *mut ffi::Py
         .lock()
         .expect("thread run queue lock poisoned");
     for entry in queues.iter_mut() {
-        entry.queue.retain(|tasklet| tasklet.as_ptr() != target);
+        remove_tasklet_object_by_ptr(entry, target);
     }
     queues.retain(|entry| !entry.queue.is_empty());
 }
@@ -3421,12 +3488,12 @@ fn remove_queued_tasklet(py: Python<'_>, target: *mut ffi::PyObject) {
         .lock()
         .expect("thread run queue lock poisoned");
     for entry in queues.iter_mut() {
-        entry.queue.retain(|tasklet| tasklet.as_ptr() != target);
+        remove_tasklet_object_by_ptr(entry, target);
     }
     queues.retain(|entry| !entry.queue.is_empty());
 }
 
-fn take_thread_run_queue(py: Python<'_>, thread_id: ThreadId) -> PyResult<Vec<PyObject>> {
+fn take_thread_run_queue(_py: Python<'_>, thread_id: ThreadId) -> PyResult<Vec<PyObject>> {
     let mut queues = THREAD_RUN_QUEUES
         .lock()
         .expect("thread run queue lock poisoned");
@@ -3435,7 +3502,7 @@ fn take_thread_run_queue(py: Python<'_>, thread_id: ThreadId) -> PyResult<Vec<Py
         let core_ids = bridge_core_clear_run_queue(entry.core_queue_id)?;
         let mut tasklets = Vec::new();
         for core_id in core_ids {
-            if let Some(tasklet) = tasklet_object_by_core_id(py, &mut entry.queue, core_id) {
+            if let Some(tasklet) = pop_tasklet_object_by_core_id(&mut entry, core_id) {
                 tasklets.push(tasklet);
             }
         }
@@ -5873,6 +5940,71 @@ assert sender_tasklet.alive is False
             assert_eq!(snapshot.balance, 0);
             assert!(snapshot.blocked_senders.is_empty());
             assert!(snapshot.blocked_receivers.is_empty());
+        });
+    }
+
+    #[test]
+    fn py_channel_public_state_getters_read_core_snapshots() {
+        Python::with_gil(|py| {
+            let scheduler = load_legacy_scheduler_module(py).expect("load scheduler package");
+            let locals = PyDict::new_bound(py);
+            locals.set_item("scheduler", &scheduler).unwrap();
+
+            py.run_bound(
+                r#"
+channel = scheduler.channel()
+channel.preference = 1
+channel.close()
+assert channel.preference == 1
+assert channel.closing is True
+assert channel.closed is True
+"#,
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("channel core state should be visible before bridge-local drift");
+
+            let channel = locals.get_item("channel").unwrap().unwrap();
+            let channel = channel.downcast::<Channel>().unwrap();
+            {
+                let mut channel = channel.try_borrow_mut().unwrap();
+                channel.preference = -1;
+                channel.closing = false;
+                channel.closed = false;
+            }
+
+            py.run_bound(
+                r#"
+assert channel.preference == 1
+assert channel.closing is True
+assert channel.closed is True
+"#,
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("public channel getters should read core snapshot, not drifted bridge fields");
+
+            {
+                let channel = channel.try_borrow().unwrap();
+                bridge_core_open_channel(channel.core_channel_id().unwrap()).unwrap();
+            }
+            {
+                let mut channel = channel.try_borrow_mut().unwrap();
+                channel.preference = -1;
+                channel.closing = true;
+                channel.closed = true;
+            }
+
+            py.run_bound(
+                r#"
+assert channel.preference == 1
+assert channel.closing is False
+assert channel.closed is False
+"#,
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("opened channel getters should remain core-authoritative");
         });
     }
 
