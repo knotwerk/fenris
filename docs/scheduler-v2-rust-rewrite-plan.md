@@ -72,7 +72,8 @@ workspace has these useful pieces:
   compatibility boundary, not the final scheduler architecture.
 - `target/carbon/evidence/scheduler-fixtures.json` passes `55/55` semantic
   fixtures, including trace-expectation bounded-pump schedule-order fixtures
-  and invalid direct tasklet run/switch no-mutation coverage, and is
+  invalid direct tasklet run/switch no-mutation coverage, and switch-trap
+  operation rejection without mutating schedule/schedule_remove events, and is
   `report_ready=true` for the scheduler fixture gate.
 - `target/carbon/evidence/legacy-scheduler.json` now passes the native Linux
   source-build path with the unchanged legacy Python unittest suite (`210`
@@ -234,7 +235,7 @@ is the shortest path from the current progress report to the final HTML report.
 
 | Gate | Current evidence | Blocker | Next proof |
 | --- | --- | --- | --- |
-| Scheduler semantic fixtures | `scheduler-fixtures.json` passes 55/55 fixtures, including limited `run_n_tasklets(1)` schedule-order fixtures, invalid direct tasklet run/switch no-mutation coverage, and fixture-level blocked-channel teardown cleanup, `report_ready=true` | Closed for the current deterministic core fixture gate | Keep this gate green while core ownership moves out of the Python bridge; add new fixtures when ownership changes touch tasklet, channel, timeout, switch-trap, or cleanup semantics. |
+| Scheduler semantic fixtures | `scheduler-fixtures.json` passes 55/55 fixtures, including limited `run_n_tasklets(1)` schedule-order fixtures, invalid direct tasklet run/switch no-mutation coverage, switch-trap trapped-operation counts with zero mutating schedule/schedule_remove events, and fixture-level blocked-channel teardown cleanup, `report_ready=true` | Closed for the current deterministic core fixture gate | Keep this gate green while core ownership moves out of the Python bridge; add new fixtures when ownership changes touch tasklet, channel, timeout, switch-trap, or cleanup semantics. |
 | Legacy scheduler baseline | `legacy-scheduler.json` passes `cargo run -p xtask -- legacy-scheduler native-linux` on this host with `210` Python tests, `7` skips, and `36/36` C API CTest cases, `report_ready=true` | Closed for this host | Keep this gate green before publishing scheduler comparison evidence. |
 | Rust scheduler Python/C API | `rust-scheduler-python.json` passes, `core_ownership_status.status=partial` | Python payload handoff, queue identity adapters, remaining lifecycle decisions, callbacks, refcount/GC, and in-process C API coverage are not final | Make `CoreScheduler` snapshots authoritative for the remaining lifecycle/channel decisions while PyO3 holds only compatibility payloads; keep unchanged Python tests and C API source slices green. |
 | Realistic IO workloads | `io-workloads.json` passes loopback and fixture-only traces | No captured legacy `carbonio`/`_socket`/`_ssl` semantic trace comparison | Capture or import supported-platform legacy Carbon IO traces and compare normalized wake/send/throw events against the Rust bridge. |

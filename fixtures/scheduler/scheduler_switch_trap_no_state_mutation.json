@@ -169,6 +169,84 @@
       ]
     }
   },
+  "trace_expect": {
+    "contains_in_order": [
+      {
+        "kind": "scheduler.switch_trap_error",
+        "operation": "send",
+        "switch_trap_level": 1
+      },
+      {
+        "kind": "scheduler.switch_trap_error",
+        "operation": "receive",
+        "switch_trap_level": 1
+      },
+      {
+        "kind": "scheduler.switch_trap_error",
+        "operation": "raise_exception",
+        "switch_trap_level": 1
+      },
+      {
+        "kind": "scheduler.switch_trap_error",
+        "operation": "kill",
+        "switch_trap_level": 1
+      },
+      {
+        "kind": "scheduler.switch_trap_error",
+        "operation": "tasklet.run",
+        "switch_trap_level": 1
+      },
+      {
+        "kind": "scheduler.switch_trap_error",
+        "operation": "tasklet.switch",
+        "switch_trap_level": 1
+      },
+      {
+        "kind": "scheduler.switch_trap_error",
+        "operation": "schedule",
+        "switch_trap_level": 1
+      },
+      {
+        "kind": "scheduler.switch_trap_error",
+        "operation": "schedule_remove",
+        "switch_trap_level": 1
+      }
+    ],
+    "match_counts": [
+      {
+        "event": {
+          "kind": "scheduler.switch_trap_error"
+        },
+        "count": 8
+      },
+      {
+        "event": {
+          "kind": "scheduler.switch_trap_error",
+          "operation": "schedule"
+        },
+        "count": 1
+      },
+      {
+        "event": {
+          "kind": "scheduler.switch_trap_error",
+          "operation": "schedule_remove"
+        },
+        "count": 1
+      },
+      {
+        "event": {
+          "kind": "scheduler.schedule"
+        },
+        "count": 0
+      },
+      {
+        "event": {
+          "kind": "scheduler.schedule_remove"
+        },
+        "count": 0
+      }
+    ]
+  },
   "expect": {
     "current": "main",
     "run_count": 1,
