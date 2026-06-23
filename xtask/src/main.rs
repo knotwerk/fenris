@@ -3498,8 +3498,32 @@ struct ScalabilityConfig {
 #[derive(Clone, Debug)]
 struct SchedulerComparisonConfig {
     tier: ScalabilityTier,
+    workload_set: SchedulerComparisonWorkloadSet,
     samples: u64,
     output: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SchedulerComparisonWorkloadSet {
+    Pressure,
+    All,
+}
+
+impl SchedulerComparisonWorkloadSet {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pressure => "pressure",
+            Self::All => "all",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "pressure" => Ok(Self::Pressure),
+            "all" => Ok(Self::All),
+            other => bail!("unsupported bench-scheduler-comparison workload set: {other}"),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -3523,7 +3547,7 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
         .any(|arg| arg.as_str() == "--help" || arg.as_str() == "-h")
     {
         println!(
-            "usage: xtask bench-scheduler-comparison [--tier quick|full] [--samples N] [--output path]"
+            "usage: xtask bench-scheduler-comparison [--workload-set pressure|all] [--tier quick|full] [--samples N] [--output path]"
         );
         return Ok(());
     }
@@ -3585,14 +3609,14 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
             None
         }
     };
-    if config.samples < 5 {
+    if config.samples < 10 {
         blockers.push(readiness_blocker(
             "scheduler_comparison_too_few_samples",
             format!(
-                "scheduler comparison used {} samples; publishable quick evidence requires at least 5",
+                "scheduler comparison used {} samples; publishable pressure evidence requires at least 10",
                 config.samples
             ),
-            "rerun bench-scheduler-comparison with --samples 5 or higher",
+            "rerun bench-scheduler-comparison with --samples 10 or higher",
         ));
     }
     if !optimized_rust_build {
@@ -3601,7 +3625,7 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
             format!(
                 "scheduler comparison build_profile={build_profile}, target_cpu_native={target_cpu_native}, debug_assertions={debug_assertions}"
             ),
-            "rerun with scripts/carbon-native-bench.sh bench-scheduler-comparison --tier quick --samples 5",
+            "rerun with scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set pressure --tier quick --samples 10",
         ));
     }
 
@@ -3647,8 +3671,9 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
         .unwrap_or_default();
 
     let mut comparisons = Vec::new();
+    let mut rejected_comparisons = Vec::new();
     if failures.is_empty() {
-        for spec in scheduler_comparison_specs(config.tier) {
+        for spec in scheduler_comparison_specs(config.tier, config.workload_set) {
             match (
                 run_scheduler_comparison_samples(
                     &python,
@@ -3667,19 +3692,20 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
             ) {
                 (Ok(legacy), Ok(rust)) => {
                     let row = scheduler_comparison_row(&spec, &legacy, &rust);
-                    if row
+                    let semantic_mismatch_count = row
                         .pointer("/semantic/mismatch_count")
                         .and_then(Value::as_u64)
-                        .unwrap_or(1)
-                        != 0
-                    {
+                        .unwrap_or(1);
+                    if semantic_mismatch_count != 0 {
                         blockers.push(readiness_blocker(
                             "scheduler_comparison_semantic_mismatch",
                             format!("{} semantic checksum mismatch", spec.workload),
                             "fix the benchmark workload or scheduler parity mismatch before publishing this comparison",
                         ));
+                        rejected_comparisons.push(row);
+                    } else {
+                        comparisons.push(row);
                     }
-                    comparisons.push(row);
                 }
                 (legacy_result, rust_result) => {
                     if let Err(error) = legacy_result {
@@ -3715,12 +3741,20 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
             "inspect scheduler-comparison.json failures and fix the failing workload runner",
         ));
     }
+    if !rejected_comparisons.is_empty() {
+        failures.push(json!({
+            "stage": "semantic_checksum_validation",
+            "rejected_rows": rejected_comparisons.len(),
+            "error": "scheduler comparison rows with semantic checksum mismatches are rejected from the comparable row set"
+        }));
+    }
 
-    let status = if failures.is_empty() && !comparisons.is_empty() {
-        "pass"
-    } else {
-        "fail"
-    };
+    let status =
+        if failures.is_empty() && rejected_comparisons.is_empty() && !comparisons.is_empty() {
+            "pass"
+        } else {
+            "fail"
+        };
     let report_ready = status == "pass" && blockers.is_empty();
     let remaining_before_report_ready = blocker_remediations(&blockers);
     let evidence = json!({
@@ -3730,6 +3764,7 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
         "status": status,
         "report_ready": report_ready,
         "tier": config.tier.as_str(),
+        "workload_set": config.workload_set.as_str(),
         "samples_per_row": config.samples,
         "build_profile": build_profile,
         "target_cpu_native": target_cpu_native,
@@ -3738,11 +3773,12 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
         "comparability": "same_python_scheduler_api_legacy_cpp_extension_vs_rust_bridge",
         "claim_scope": "publishable lab scheduler orchestration comparison; real game-environment validation remains the next production gate",
         "command": format!(
-            "cargo run -p xtask -- bench-scheduler-comparison --tier {} --samples {}",
+            "cargo run -p xtask -- bench-scheduler-comparison --workload-set {} --tier {} --samples {}",
+            config.workload_set.as_str(),
             config.tier.as_str(),
             config.samples
         ),
-        "recommended_blog_command": "scripts/carbon-native-bench.sh bench-scheduler-comparison --tier quick --samples 5",
+        "recommended_blog_command": "scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set pressure --tier quick --samples 10",
         "duration_ms": started.elapsed().as_millis() as u64,
         "host": {
             "os": env::consts::OS,
@@ -3774,6 +3810,7 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
         },
         "summary": scheduler_comparison_summary(&comparisons),
         "comparisons": comparisons,
+        "rejected_comparisons": rejected_comparisons,
         "failures": failures,
         "blockers": blockers,
         "remaining_before_report_ready": remaining_before_report_ready,
@@ -3784,12 +3821,13 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
     });
     write_json(&config.output, &evidence)?;
     println!(
-        "bench-scheduler-comparison: {status} ({} comparisons, tier {}, samples {}, report_ready={report_ready}); evidence {}",
+        "bench-scheduler-comparison: {status} ({} comparisons, workload_set {}, tier {}, samples {}, report_ready={report_ready}); evidence {}",
         evidence
             .get("comparisons")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or_default(),
+        config.workload_set.as_str(),
         config.tier.as_str(),
         config.samples,
         config.output.display()
@@ -3807,6 +3845,7 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
 
 fn parse_bench_scheduler_comparison_args(args: Vec<String>) -> Result<SchedulerComparisonConfig> {
     let mut tier = ScalabilityTier::Quick;
+    let mut workload_set = SchedulerComparisonWorkloadSet::All;
     let mut samples = None;
     let mut output = evidence_path("scheduler-comparison.json");
     let mut index = 0;
@@ -3819,6 +3858,13 @@ fn parse_bench_scheduler_comparison_args(args: Vec<String>) -> Result<SchedulerC
                     bail!("--tier requires quick or full");
                 };
                 tier = ScalabilityTier::parse(value)?;
+            }
+            "--workload-set" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    bail!("--workload-set requires pressure or all");
+                };
+                workload_set = SchedulerComparisonWorkloadSet::parse(value)?;
             }
             "--samples" => {
                 index += 1;
@@ -3847,37 +3893,48 @@ fn parse_bench_scheduler_comparison_args(args: Vec<String>) -> Result<SchedulerC
 
     Ok(SchedulerComparisonConfig {
         tier,
-        samples: samples.unwrap_or(5),
+        workload_set,
+        samples: samples.unwrap_or(10),
         output,
     })
 }
 
-fn scheduler_comparison_specs(tier: ScalabilityTier) -> Vec<SchedulerComparisonSpec> {
+fn scheduler_comparison_specs(
+    tier: ScalabilityTier,
+    workload_set: SchedulerComparisonWorkloadSet,
+) -> Vec<SchedulerComparisonSpec> {
     let mut specs = vec![
         scheduler_comparison_spec(
             "runnable_tasklets_128",
             "Runnable tasklets, 128",
             "Schedule and drain 128 deterministic tasklets.",
-            json!({"workload": "runnable_tasklets", "tasklets": 128, "iterations": 20}),
+            json!({"workload": "runnable_tasklets", "tasklets": 128, "iterations": 40}),
         ),
         scheduler_comparison_spec(
             "runnable_tasklets_1024",
             "Runnable tasklets, 1,024",
             "Schedule and drain 1,024 deterministic tasklets.",
-            json!({"workload": "runnable_tasklets", "tasklets": 1024, "iterations": 6}),
+            json!({"workload": "runnable_tasklets", "tasklets": 1024, "iterations": 10}),
         ),
         scheduler_comparison_spec(
             "channel_rendezvous_32",
             "Channel rendezvous, 32 pairs",
             "Pair blocked receivers and senders through scheduler channels.",
-            json!({"workload": "channel_rendezvous", "pairs": 32, "iterations": 20}),
+            json!({"workload": "channel_rendezvous", "pairs": 32, "iterations": 40}),
         ),
         scheduler_comparison_spec(
             "channel_rendezvous_256",
             "Channel rendezvous, 256 pairs",
             "Scale channel handoff pressure to 256 sender/receiver pairs.",
-            json!({"workload": "channel_rendezvous", "pairs": 256, "iterations": 6}),
+            json!({"workload": "channel_rendezvous", "pairs": 256, "iterations": 8}),
         ),
+    ];
+
+    if workload_set == SchedulerComparisonWorkloadSet::Pressure {
+        return specs;
+    }
+
+    specs.extend([
         scheduler_comparison_spec(
             "fanout_pipeline_256b",
             "Fanout pipeline, 256 B payloads",
@@ -3890,7 +3947,7 @@ fn scheduler_comparison_specs(tier: ScalabilityTier) -> Vec<SchedulerComparisonS
             "Synthetic game loop with zones, entity updates, network-like messages, and aggregation.",
             json!({"workload": "zone_tick_study", "zones": 4, "entities_per_zone": 256, "ticks": 20, "message_stride": 32}),
         ),
-    ];
+    ]);
 
     if tier == ScalabilityTier::Full {
         specs.extend([
@@ -4059,6 +4116,21 @@ fn scheduler_comparison_row(
         sample_stats_value_u64(&sample_stats_us_extended(&legacy_latency_samples), "p99_9");
     let rust_p99_9 =
         sample_stats_value_u64(&sample_stats_us_extended(&rust_latency_samples), "p99_9");
+    let legacy_operation_throughput_samples =
+        scheduler_side_throughput_samples(legacy, "operation_count");
+    let rust_operation_throughput_samples =
+        scheduler_side_throughput_samples(rust, "operation_count");
+    let legacy_message_throughput_samples =
+        scheduler_side_throughput_samples(legacy, "message_count");
+    let rust_message_throughput_samples = scheduler_side_throughput_samples(rust, "message_count");
+    let legacy_data_bytes_throughput_samples =
+        scheduler_side_throughput_samples(legacy, "data_bytes_processed");
+    let rust_data_bytes_throughput_samples =
+        scheduler_side_throughput_samples(rust, "data_bytes_processed");
+    let legacy_operation_throughput_stability =
+        throughput_stability_summary(&legacy_operation_throughput_samples);
+    let rust_operation_throughput_stability =
+        throughput_stability_summary(&rust_operation_throughput_samples);
     let operation_count = legacy_operation_count.min(rust_operation_count);
 
     json!({
@@ -4081,6 +4153,9 @@ fn scheduler_comparison_row(
         "legacy_duration_us": legacy_duration_us,
         "rust_duration_us": rust_duration_us,
         "speedup": speedup_ratio(legacy_duration_us, rust_duration_us),
+        "speedup_lab_only": true,
+        "speedup_scope": "lab_only_same_python_scheduler_api_process_comparison",
+        "speedup_production_gate": "real_game_environment_scheduler_validation_required",
         "legacy_sample_stats_us": sample_stats_us_extended(&legacy_latency_samples),
         "rust_sample_stats_us": sample_stats_us_extended(&rust_latency_samples),
         "legacy_throughput_operations_per_sec": rate_per_second_us(legacy_operation_count, legacy_duration_us),
@@ -4089,6 +4164,14 @@ fn scheduler_comparison_row(
         "rust_throughput_messages_per_sec": rate_per_second_us(rust_message_count, rust_duration_us),
         "legacy_throughput_data_bytes_per_sec": rate_per_second_us(legacy_data_bytes, legacy_duration_us),
         "rust_throughput_data_bytes_per_sec": rate_per_second_us(rust_data_bytes, rust_duration_us),
+        "legacy_throughput_operations_per_sec_samples": legacy_operation_throughput_samples,
+        "rust_throughput_operations_per_sec_samples": rust_operation_throughput_samples,
+        "legacy_throughput_messages_per_sec_samples": legacy_message_throughput_samples,
+        "rust_throughput_messages_per_sec_samples": rust_message_throughput_samples,
+        "legacy_throughput_data_bytes_per_sec_samples": legacy_data_bytes_throughput_samples,
+        "rust_throughput_data_bytes_per_sec_samples": rust_data_bytes_throughput_samples,
+        "legacy_throughput_stability": legacy_operation_throughput_stability,
+        "rust_throughput_stability": rust_operation_throughput_stability,
         "primary_throughput_metric": "throughput_operations_per_sec",
         "primary_latency_metric": "sample_stats_us",
         "legacy_process_samples": process_metrics_sample_json(&legacy.process_metrics),
@@ -4123,6 +4206,21 @@ fn scheduler_side_sum_u64(side: &SchedulerComparisonSide, key: &str) -> u64 {
         .iter()
         .filter_map(|run| run.get(key).and_then(Value::as_u64))
         .sum()
+}
+
+fn scheduler_side_throughput_samples(side: &SchedulerComparisonSide, count_key: &str) -> Vec<f64> {
+    side.runs
+        .iter()
+        .filter_map(|run| {
+            let count = run.get(count_key).and_then(Value::as_u64)?;
+            let duration_us = run.get("duration_us").and_then(Value::as_u64)?;
+            if duration_us == 0 {
+                None
+            } else {
+                Some(count as f64 * 1_000_000.0 / duration_us as f64)
+            }
+        })
+        .collect()
 }
 
 fn scheduler_side_latency_samples(side: &SchedulerComparisonSide) -> Vec<u64> {
@@ -15499,20 +15597,24 @@ fn scheduler_comparison_report_ready_blockers(value: &Value) -> Vec<Value> {
         .get("samples_per_row")
         .and_then(Value::as_u64)
         .unwrap_or_default()
-        < 5
+        < 10
     {
         blockers.push(readiness_blocker(
             "scheduler_comparison_too_few_samples",
-            "scheduler comparison evidence has fewer than 5 samples per row",
-            "rerun bench-scheduler-comparison with --samples 5 or higher",
+            "scheduler comparison evidence has fewer than 10 samples per row",
+            "rerun bench-scheduler-comparison with --samples 10 or higher",
         ));
     }
-    if value
+    let semantic_mismatch_rows = value
         .pointer("/summary/semantic_mismatch_rows")
         .and_then(Value::as_u64)
-        .unwrap_or(1)
-        != 0
-    {
+        .unwrap_or(1);
+    let rejected_comparisons = value
+        .get("rejected_comparisons")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    if semantic_mismatch_rows != 0 || rejected_comparisons != 0 {
         blockers.push(readiness_blocker(
             "scheduler_comparison_semantic_mismatch",
             "scheduler comparison evidence records semantic mismatches",
@@ -15526,7 +15628,7 @@ fn scheduler_comparison_report_ready_blockers(value: &Value) -> Vec<Value> {
         blockers.push(readiness_blocker(
             "scheduler_comparison_not_release_native",
             "scheduler comparison evidence was not produced by release-native target-cpu=native without debug assertions",
-            "rerun scripts/carbon-native-bench.sh bench-scheduler-comparison --tier quick --samples 5",
+            "rerun scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set pressure --tier quick --samples 10",
         ));
     }
     blockers
@@ -16135,7 +16237,7 @@ fn shell_quote(value: &str) -> String {
 
 fn print_usage() {
     eprintln!(
-        "usage: cargo run -p xtask -- <command>\n\ncommands:\n  scheduler-fixtures [fixtures/scheduler]\n  scheduler-trace <fixture-path>\n  legacy-scheduler [build|run|build-run|native-linux]\n  legacy-scheduler import <artifact.json|ctest.log> [--host-os <windows|macos>] [--host-arch <x86_64|aarch64>]\n  rust-scheduler-python\n  io-workloads\n  legacy-resources\n  rust-resources\n  bench\n  bench-scheduler-comparison [--tier quick|full] [--samples N]\n  bench-scalability [--tier quick|full] [--families scheduler,io,data] [--samples N]\n  bench-scheduler-core [fixture-path] [iterations]\n  report-readiness\n  report-progress\n  report\n  rust-resources-cli <legacy-resource-command> [options]\n  rust-create-group [options] <input-directory>\n  rust-create-group-from-filter [options]\n  rust-create-bundle [options] <resource-group-path>\n  rust-unpack-bundle [options] <bundle-resource-group-path>\n  rust-create-patch [options] <previous-resource-group-path> <next-resource-group-path>\n  rust-apply-patch [options] <patch-resource-group-path>\n  rust-merge-group [options] <base-resource-group-path> <merge-resource-group-path>\n  rust-diff-group [options] <base-resource-group-path> <diff-resource-group-path>\n  rust-remove-resources [options] <resource-group-path> <resource-list-path>"
+        "usage: cargo run -p xtask -- <command>\n\ncommands:\n  scheduler-fixtures [fixtures/scheduler]\n  scheduler-trace <fixture-path>\n  legacy-scheduler [build|run|build-run|native-linux]\n  legacy-scheduler import <artifact.json|ctest.log> [--host-os <windows|macos>] [--host-arch <x86_64|aarch64>]\n  rust-scheduler-python\n  io-workloads\n  legacy-resources\n  rust-resources\n  bench\n  bench-scheduler-comparison [--workload-set pressure|all] [--tier quick|full] [--samples N]\n  bench-scalability [--tier quick|full] [--families scheduler,io,data] [--samples N]\n  bench-scheduler-core [fixture-path] [iterations]\n  report-readiness\n  report-progress\n  report\n  rust-resources-cli <legacy-resource-command> [options]\n  rust-create-group [options] <input-directory>\n  rust-create-group-from-filter [options]\n  rust-create-bundle [options] <resource-group-path>\n  rust-unpack-bundle [options] <bundle-resource-group-path>\n  rust-create-patch [options] <previous-resource-group-path> <next-resource-group-path>\n  rust-apply-patch [options] <patch-resource-group-path>\n  rust-merge-group [options] <base-resource-group-path> <merge-resource-group-path>\n  rust-diff-group [options] <base-resource-group-path> <diff-resource-group-path>\n  rust-remove-resources [options] <resource-group-path> <resource-list-path>"
     );
 }
 
@@ -19454,9 +19556,23 @@ mod tests {
         let row = scheduler_comparison_row(&spec, &legacy, &rust);
         assert_eq!(number_at(&row, &["speedup"]), Some(2.0));
         assert_eq!(
+            row.get("speedup_lab_only").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             row.pointer("/semantic/mismatch_count")
                 .and_then(Value::as_u64),
             Some(0)
+        );
+        assert_eq!(
+            row.pointer("/legacy_sample_stats_us/p99_9")
+                .and_then(Value::as_u64),
+            Some(20)
+        );
+        assert_eq!(
+            row.pointer("/legacy_throughput_stability/window_count")
+                .and_then(Value::as_u64),
+            Some(1)
         );
         assert_eq!(
             row.get("comparability").and_then(Value::as_str),
@@ -19468,6 +19584,49 @@ mod tests {
             number_at(&summary, &["geomean_throughput_speedup"]),
             Some(2.0)
         );
+    }
+
+    #[test]
+    fn scheduler_comparison_pressure_workload_set_matches_gate_shape() {
+        let specs = scheduler_comparison_specs(
+            ScalabilityTier::Full,
+            SchedulerComparisonWorkloadSet::Pressure,
+        );
+
+        assert_eq!(specs.len(), 4);
+        assert_eq!(specs[0].workload, "runnable_tasklets_128");
+        assert_eq!(
+            specs[0].spec.get("tasklets").and_then(Value::as_u64),
+            Some(128)
+        );
+        assert_eq!(
+            specs[0].spec.get("iterations").and_then(Value::as_u64),
+            Some(40)
+        );
+        assert_eq!(specs[1].workload, "runnable_tasklets_1024");
+        assert_eq!(
+            specs[1].spec.get("iterations").and_then(Value::as_u64),
+            Some(10)
+        );
+        assert_eq!(specs[2].workload, "channel_rendezvous_32");
+        assert_eq!(specs[2].spec.get("pairs").and_then(Value::as_u64), Some(32));
+        assert_eq!(
+            specs[2].spec.get("iterations").and_then(Value::as_u64),
+            Some(40)
+        );
+        assert_eq!(specs[3].workload, "channel_rendezvous_256");
+        assert_eq!(
+            specs[3].spec.get("pairs").and_then(Value::as_u64),
+            Some(256)
+        );
+        assert_eq!(
+            specs[3].spec.get("iterations").and_then(Value::as_u64),
+            Some(8)
+        );
+
+        let all_specs =
+            scheduler_comparison_specs(ScalabilityTier::Quick, SchedulerComparisonWorkloadSet::All);
+        assert!(all_specs.len() > specs.len());
     }
 
     #[test]

@@ -305,6 +305,44 @@ def scheduler_comparable_rows(evidence: dict) -> list[dict]:
     ]
 
 
+COMPARABLE_PRESSURE_SHAPES = {
+    "runnable_tasklets_128": {
+        "axis": "tasklet_count",
+        "tasklet_count": 128,
+        "iterations_per_process": 40,
+    },
+    "runnable_tasklets_1024": {
+        "axis": "tasklet_count",
+        "tasklet_count": 1024,
+        "iterations_per_process": 10,
+    },
+    "channel_rendezvous_32": {
+        "axis": "channel_pair_count",
+        "channel_pair_count": 32,
+        "tasklet_count": 64,
+        "iterations_per_process": 40,
+    },
+    "channel_rendezvous_256": {
+        "axis": "channel_pair_count",
+        "channel_pair_count": 256,
+        "tasklet_count": 512,
+        "iterations_per_process": 8,
+    },
+}
+
+
+def scheduler_pressure_comparable_rows(rows: list[dict]) -> list[dict]:
+    pressure_rows = []
+    for row in rows:
+        expected = COMPARABLE_PRESSURE_SHAPES.get(str(row.get("workload") or ""))
+        pressure = row.get("pressure") or {}
+        if not expected:
+            continue
+        if all(pressure.get(key) == value for key, value in expected.items()):
+            pressure_rows.append(row)
+    return pressure_rows
+
+
 def report_is_publishable(bench: dict, rows: list[dict]) -> bool:
     readiness = bench.get("optimization_readiness") or {}
     return (
@@ -322,6 +360,9 @@ def scheduler_report_is_publishable(evidence: dict, rows: list[dict]) -> bool:
         bool(rows)
         and evidence.get("status") == "pass"
         and evidence.get("report_ready") is True
+        and number(evidence.get("samples_per_row")) is not None
+        and number(evidence.get("samples_per_row")) >= 10
+        and not evidence.get("rejected_comparisons")
         and all((row.get("semantic") or {}).get("mismatch_count") == 0 for row in rows)
     )
 
@@ -793,6 +834,44 @@ def comparison_table_rows(rows: list[dict], *, empty_text: str) -> str:
     return "\n".join(rendered)
 
 
+def scheduler_pressure_comparison_rows(rows: list[dict]) -> str:
+    if not rows:
+        return '<tr><td colspan="9">No matched legacy-vs-Rust pressure rows available.</td></tr>'
+    max_speedup = max(float(row.get("speedup") or 0) for row in rows) or 1.0
+    rendered = []
+    for row in sorted(rows, key=lambda item: str(item.get("workload") or "")):
+        title, detail = pressure_label(row)
+        speedup = number(row.get("speedup"))
+        legacy_p99 = path_value(row, "/legacy_sample_stats_us/p99")
+        rust_p99 = path_value(row, "/rust_sample_stats_us/p99")
+        legacy_p999 = path_value(row, "/legacy_sample_stats_us/p99_9")
+        rust_p999 = path_value(row, "/rust_sample_stats_us/p99_9")
+        legacy_cpu = path_value(row, "/legacy_process_stats/cpu_percent/p95")
+        rust_cpu = path_value(row, "/rust_process_stats/cpu_percent/p95")
+        legacy_rss = path_value(row, "/legacy_process_stats/max_rss_kb/p95")
+        rust_rss = path_value(row, "/rust_process_stats/max_rss_kb/p95")
+        legacy_cv = path_value(row, "/legacy_throughput_stability/coefficient_of_variation")
+        rust_cv = path_value(row, "/rust_throughput_stability/coefficient_of_variation")
+        parity = row.get("parity_status") or "n/a"
+        mismatch_count = path_value(row, "/semantic/mismatch_count")
+        if mismatch_count is not None:
+            parity = f"{parity}; mismatches={fmt_int(mismatch_count)}"
+        rendered.append(
+            "<tr>"
+            f"<td><strong>{h(title)}</strong><small>{h(detail)}</small></td>"
+            f"<td><strong>{fmt_directional_ratio(speedup)}</strong><div class=\"bar\"><span style=\"width:{bar_width(speedup, max_speedup):.1f}%\"></span></div><small>lab-only same-API ratio</small></td>"
+            f"<td><strong>{h(fmt_rate(row.get('legacy_throughput_operations_per_sec'), 'operations'))} -> {h(fmt_rate(row.get('rust_throughput_operations_per_sec'), 'operations'))}</strong><small>operations/sec</small></td>"
+            f"<td><strong>{fmt_us(legacy_p99)} -> {fmt_us(rust_p99)}</strong><small>legacy vs Rust p99</small></td>"
+            f"<td><strong>{fmt_us(legacy_p999)} -> {fmt_us(rust_p999)}</strong><small>legacy vs Rust p99.9</small></td>"
+            f"<td><strong>{fmt_percent(legacy_cpu)} -> {fmt_percent(rust_cpu)}</strong><small>CPU p95</small></td>"
+            f"<td><strong>{fmt_kb(legacy_rss)} -> {fmt_kb(rust_rss)}</strong><small>peak RSS p95</small></td>"
+            f"<td><strong>{fmt_cv(legacy_cv)} -> {fmt_cv(rust_cv)}</strong><small>throughput CV</small></td>"
+            f"<td><small>{h(parity)}</small></td>"
+            "</tr>"
+        )
+    return "\n".join(rendered)
+
+
 def pressure_label(row: dict) -> tuple[str, str]:
     workload = str(row.get("workload") or "")
     pressure = row.get("pressure") or {}
@@ -931,10 +1010,13 @@ def methodology(bench: dict, rows: list[dict], evidence_dir: Path) -> str:
     build_profile = bench.get("build_profile") or path_value(bench, "/host/rust_build/build_profile", "unknown")
     target_cpu = bench.get("target_cpu_native") if "target_cpu_native" in bench else path_value(bench, "/host/rust_build/target_cpu_native", "unknown")
     debug_assertions = bench.get("debug_assertions") if "debug_assertions" in bench else path_value(bench, "/host/rust_build/debug_assertions", "unknown")
+    workload_set = bench.get("workload_set") or "unknown"
+    samples = bench.get("samples_per_row") or "unknown"
     return "\n".join(
         [
             "<p><strong>Old baseline</strong><br>Legacy C++ <code>_scheduler.so</code> native Linux build through the Python scheduler package.</p>",
             f"<p><strong>Rust baseline</strong><br>Rust scheduler Python bridge; build={h(build_profile)}; target-cpu=native={h(target_cpu)}; debug assertions={h(debug_assertions)}</p>",
+            f"<p><strong>Pressure workload set</strong><br>{h(workload_set)}; {h(samples)} samples per matched row.</p>",
             f"<p><strong>Host</strong><br>{h(host)}; {h(logical_cpus)} logical CPUs</p>",
             f"<p><strong>Evidence</strong><br>{h(evidence_dir / 'scheduler-comparison.json')}</p>",
             "<p><strong>Claim boundary</strong><br>Lab scheduler orchestration comparison; real game-environment validation remains the production gate.</p>",
@@ -993,13 +1075,14 @@ def blocked_report(evidence_dir: Path, bench: dict, rows: list[dict]) -> str:
 def render(evidence_dir: Path) -> str:
     scheduler_path = evidence_dir / "scheduler-comparison.json"
     scheduler_evidence = load_json(scheduler_path) if scheduler_path.exists() else {}
-    scheduler_rows = scheduler_comparable_rows(scheduler_evidence)
-    if scheduler_report_is_publishable(scheduler_evidence, scheduler_rows):
+    all_scheduler_rows = scheduler_comparable_rows(scheduler_evidence)
+    matched_pressure_rows = scheduler_pressure_comparable_rows(all_scheduler_rows)
+    if scheduler_report_is_publishable(scheduler_evidence, matched_pressure_rows):
         bench = scheduler_evidence
-        rows = scheduler_rows
+        rows = matched_pressure_rows
     else:
         bench = scheduler_evidence
-        rows = scheduler_rows
+        rows = matched_pressure_rows
         return blocked_report(evidence_dir, bench, rows)
 
     resources_evidence = optional_json(evidence_dir / "bench-tier-local.json")
@@ -1267,7 +1350,7 @@ def render(evidence_dir: Path) -> str:
     <div class="hero">
       <p class="eyebrow">Carbon scheduler rewrite evidence</p>
       <h1>Carbon scheduler parity is green in the lab; performance work remains.</h1>
-      <p class="lead">This report is scheduler-first. It compares the legacy C++ scheduler extension and the Rust scheduler bridge through the same Python tasklet/channel API, then separates resource-tool wins and IO/pressure evidence so the claims stay clear.</p>
+      <p class="lead">This report is scheduler-first. It compares matched pressure rows for the legacy C++ scheduler extension and the Rust scheduler bridge through the same Python tasklet/channel API, then separates resource-tool wins and Rust-only pressure evidence so the claims stay clear.</p>
       <div class="metric-grid">
         $top_line_cards
       </div>
@@ -1291,8 +1374,8 @@ def render(evidence_dir: Path) -> str:
         <h2>What Changed</h2>
         <ul>
           <li>The scheduler path under test keeps the legacy Python API, but routes covered run-queue, tasklet, channel, and switch-trap decisions through Rust-owned scheduler state.</li>
-          <li>Each matched scheduler row records semantic checksum parity plus throughput, p50/p99 latency, CPU burn, and peak RSS.</li>
-          <li>The next production gate is a real game-environment scheduler workload; the current fake-game row is lab orchestration evidence, not a production claim.</li>
+          <li>Each matched pressure row records semantic checksum parity plus throughput, p99/p99.9 latency, CPU p95, peak RSS p95, and throughput CV.</li>
+          <li>The next production gate is a real game-environment scheduler workload; the pressure table is lab orchestration evidence, not a production claim.</li>
         </ul>
       </aside>
     </section>
@@ -1366,22 +1449,23 @@ def render(evidence_dir: Path) -> str:
     <section>
       <div class="section-head">
         <div>
-          <h2>Scheduler Lab Results</h2>
-          <p>Matched legacy C++ scheduler extension vs Rust scheduler bridge. Same Python tasklet/channel API, release-native Rust build, zero semantic mismatches in these rows.</p>
+          <h2>Comparable Pressure</h2>
+          <p>Matched legacy C++ scheduler extension vs Rust scheduler bridge. Same Python tasklet/channel API, exact pressure workload set, release-native Rust build, zero semantic mismatches in accepted rows.</p>
         </div>
-        <span class="tag">Matched comparison</span>
+        <span class="tag">Lab-only speedup</span>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Workload</th>
-              <th>Wall latency</th>
-              <th>p50 latency</th>
-              <th>p99 tail</th>
+              <th>Pressure</th>
+              <th>Speedup</th>
               <th>Throughput</th>
-              <th>CPU burn</th>
-              <th>Peak memory</th>
+              <th>p99 latency</th>
+              <th>p99.9 latency</th>
+              <th>CPU p95</th>
+              <th>Peak RSS p95</th>
+              <th>Stability</th>
               <th>Parity</th>
             </tr>
           </thead>
@@ -1427,7 +1511,7 @@ def render(evidence_dir: Path) -> str:
     <section>
       <div class="section-head">
         <div>
-          <h2>Scheduler Pressure Rows</h2>
+          <h2>Rust-Only Pressure</h2>
           <p>Rust scheduler-core pressure evidence only. These rows show scaling shape and tail behavior, not old-vs-Rust speedups.</p>
         </div>
         <span class="tag">Rust-only pressure</span>
@@ -1508,9 +1592,8 @@ def render(evidence_dir: Path) -> str:
         scheduler_story=scheduler_story_section(scheduler_gates),
         scheduler_gate_rows=scheduler_gate_rows(scheduler_gates),
         tested_workloads=tested_workloads(rows + resource_rows),
-        scheduler_rows=comparison_table_rows(
+        scheduler_rows=scheduler_pressure_comparison_rows(
             rows,
-            empty_text="No matched scheduler comparison rows available.",
         ),
         resource_rows=comparison_table_rows(
             resource_rows,

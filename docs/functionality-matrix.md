@@ -196,9 +196,9 @@ names. The current Rust gate parses this v0 envelope with
 Tier 1 benchmark evidence, matched scheduler comparison evidence, scheduler
 pressure evidence, IO workload evidence, and progress report refresh. The
 scheduler comparison evidence now records matched legacy C++ scheduler vs Rust
-scheduler bridge lab rows with semantic checksums, throughput, p99, CPU burn,
-CPU percent, and RSS; those rows are lab evidence until a real game-environment
-workload exists.
+scheduler bridge pressure rows with semantic checksums, throughput, p99/p99.9,
+CPU p95, peak RSS p95, and throughput CV; those rows are lab evidence until a
+real game-environment workload exists.
 For resources process comparisons, `bench-tier-local.json` now records
 `optimization_readiness`, selected legacy resources CLI paths, surrounding
 CMake build type, and `legacy_known_non_debug`. On this checkout those selected

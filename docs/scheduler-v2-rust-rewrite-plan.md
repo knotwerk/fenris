@@ -75,9 +75,9 @@ workspace has these useful pieces:
 - `target/carbon/evidence/io-workloads.json` passes loopback and fixture-only
   semantic checks but still lacks captured legacy Carbon IO traces.
 - `target/carbon/evidence/scheduler-comparison.json` now has matched legacy C++
-  scheduler vs Rust scheduler bridge lab rows with semantic checksums,
-  throughput, p99, CPU, and RSS. It is lab evidence; real game-environment
-  validation remains the production gate.
+  scheduler vs Rust scheduler bridge pressure rows with semantic checksums,
+  throughput, p99/p99.9, CPU p95, peak RSS p95, and throughput CV. It is lab
+  evidence; real game-environment validation remains the production gate.
 
 This is a strong parity foundation, but it is not yet the V2 performance
 architecture. It should be treated as the baseline to commit before the more
@@ -232,7 +232,7 @@ is the shortest path from the current progress report to the final HTML report.
 | Legacy scheduler baseline | `legacy-scheduler.json` passes `cargo run -p xtask -- legacy-scheduler native-linux` on this host with `210` Python tests, `7` skips, and `36/36` C API CTest cases, `report_ready=true` | Closed for this host | Keep this gate green before publishing scheduler comparison evidence. |
 | Rust scheduler Python/C API | `rust-scheduler-python.json` passes, `core_ownership_status.status=partial` | Python payload handoff, queue identity adapters, remaining lifecycle decisions, callbacks, refcount/GC, and in-process C API coverage are not final | Make `CoreScheduler` snapshots authoritative for the remaining lifecycle/channel decisions while PyO3 holds only compatibility payloads; keep unchanged Python tests and C API source slices green. |
 | Realistic IO workloads | `io-workloads.json` passes loopback and fixture-only traces | No captured legacy `carbonio`/`_socket`/`_ssl` semantic trace comparison | Capture or import supported-platform legacy Carbon IO traces and compare normalized wake/send/throw events against the Rust bridge. |
-| Scheduler benchmark comparability | `scheduler-comparison.json` has matched legacy C++ scheduler vs Rust scheduler bridge lab rows with semantic checksums, throughput, p99, CPU, and RSS | Real game-environment validation is still not captured | Use the lab rows for clearly labeled scheduler comparison, then add a real game trace or harness before production scheduler claims. |
+| Scheduler benchmark comparability | `scheduler-comparison.json` has matched legacy C++ scheduler vs Rust scheduler bridge pressure rows with semantic checksums, throughput, p99/p99.9, CPU p95, peak RSS p95, and throughput CV | Real game-environment validation is still not captured | Use the lab rows for clearly labeled scheduler comparison, then add a real game trace or harness before production scheduler claims. |
 | Final report | `report-progress` writes HTML; `report` exits `1` | Multiple evidence files have `report_ready=false` | Every feature/performance claim in the final report links to passing, report-ready evidence. |
 
 Do not start invasive V2 core rewrites until this table is either complete or
@@ -256,6 +256,9 @@ Required before the baseline commit:
 - `cargo test -p carbon-scheduler-python` passes.
 - `cargo run -p xtask -- scheduler-fixtures` passes.
 - `cargo run -p xtask -- rust-scheduler-python` passes.
+- `scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set
+  pressure --tier quick --samples 10` passes with zero rejected semantic
+  mismatches.
 - `cargo run -p xtask -- io-workloads` passes or its unsupported legacy trace
   blocker is explicitly recorded.
 - Fixture coverage and known unsupported cases are recorded.
@@ -1496,8 +1499,8 @@ Deliverables:
   narrowed or cleared;
 - captured/imported legacy Carbon IO semantic traces, or final-report wording
   that limits IO claims to loopback/resource observations;
-- scheduler comparison rows stay clearly labeled as lab evidence until a real
-  game-environment workload exists;
+- scheduler pressure comparison rows stay clearly labeled as lab evidence until
+  a real game-environment workload exists;
 - `cargo run -p xtask -- report` succeeds only after all included claims are
   evidence-backed.
 
@@ -1790,8 +1793,8 @@ Exit gate:
 4. Capture or import normalized legacy Carbon IO traces for `carbonio`,
    `_socket`, and `_ssl`, then compare them against the Rust bridge traces.
 5. Keep `scheduler-comparison.json` green as the matched legacy scheduler vs
-   Rust scheduler bridge lab benchmark; use it for lab comparison only until a
-   real game-environment workload is captured.
+   Rust scheduler bridge pressure benchmark; use it for lab comparison only
+   until a real game-environment workload is captured.
 6. Regenerate `cargo run -p xtask -- report-progress` after each evidence slice
    and keep `cargo run -p xtask -- report` blocked until every included claim is
    report-ready.
