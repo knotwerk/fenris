@@ -101,6 +101,7 @@ static ALL_TIME_TASKLETS: AtomicU32 = AtomicU32::new(1);
 static ACTIVE_TASKLETS: AtomicU32 = AtomicU32::new(1);
 static ACTIVE_CHANNEL_OBJECTS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 static THREAD_RUN_QUEUES: Mutex<Vec<ThreadRunQueue>> = Mutex::new(Vec::new());
+static PENDING_RUN_QUEUE_REMOVALS: Mutex<Vec<PendingRunQueueRemoval>> = Mutex::new(Vec::new());
 static SCHEDULE_CALLBACK: Mutex<Option<PyObject>> = Mutex::new(None);
 static SCHEDULE_FAST_CALLBACK: Mutex<Option<ScheduleHookFunc>> = Mutex::new(None);
 static SCHEDULE_CALLBACK_PRESENT: AtomicBool = AtomicBool::new(false);
@@ -108,6 +109,7 @@ static SCHEDULE_FAST_CALLBACK_PRESENT: AtomicBool = AtomicBool::new(false);
 static LAST_TIMEOUT_COMPLETED_TASKLETS: AtomicI32 = AtomicI32::new(0);
 static LAST_TIMEOUT_SWITCHED_TASKLETS: AtomicI32 = AtomicI32::new(0);
 static RUN_QUEUE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static FOREIGN_RUN_QUEUE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static BRIDGE_CORE_SCHEDULER: OnceLock<Mutex<CoreScheduler>> = OnceLock::new();
 const MIN_POSITIVE_RUN_TIMEOUT_NANOS: u128 = 10_000_000;
 
@@ -125,6 +127,12 @@ struct QueuedTasklet {
     object: PyObject,
 }
 
+#[derive(Clone, Copy)]
+struct PendingRunQueueRemoval {
+    thread_id: ThreadId,
+    core_id: CoreTaskletId,
+}
+
 trait GilDropValue: Default {
     fn abandon_without_python(self);
 }
@@ -133,6 +141,16 @@ impl GilDropValue for Option<PyObject> {
     fn abandon_without_python(self) {
         if let Some(object) = self {
             forget(object);
+        }
+    }
+}
+
+impl GilDropValue for Option<ThreadRunQueue> {
+    fn abandon_without_python(self) {
+        if let Some(mut queue) = self {
+            while let Some(tasklet) = queue.queue.pop_front() {
+                forget(tasklet.object);
+            }
         }
     }
 }
@@ -225,7 +243,7 @@ impl Drop for ThreadCleanupGuard {
         unsafe {
             let gil_state = ffi::PyGILState_Ensure();
             let py = Python::assume_gil_acquired();
-            cleanup_thread_state(py, self.thread_id);
+            cleanup_thread_state_without_tls(py, self.thread_id);
             ffi::PyGILState_Release(gil_state);
         }
     }
@@ -274,12 +292,23 @@ thread_local! {
     static CHANNEL_CALLBACK: GilDropRefCell<Option<PyObject>> = const { GilDropRefCell::new(None) };
     static CHANNEL_CALLBACK_TOUCHED: RefCell<bool> = const { RefCell::new(false) };
     static GREENLET_CACHE: GilDropRefCell<Option<GreenletThreadCache>> = const { GilDropRefCell::new(None) };
+    static CURRENT_THREAD_RUN_QUEUE: GilDropRefCell<Option<ThreadRunQueue>> = const { GilDropRefCell::new(None) };
+    static FOREIGN_RUN_QUEUE_SEEN: RefCell<u64> = const { RefCell::new(0) };
     static RUN_QUEUE_COUNT_CACHE: RefCell<Option<(u64, usize)>> = const { RefCell::new(None) };
     static TASKLET_CONTEXT_C_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 fn cleanup_thread_state(py: Python<'_>, thread_id: ThreadId) {
     if let Ok(tasklets) = take_thread_run_queue(py, thread_id) {
+        for tasklet in tasklets {
+            finish_tasklet_for_thread_exit(py, &tasklet);
+        }
+    }
+    cleanup_thread_channels(py, thread_id);
+}
+
+fn cleanup_thread_state_without_tls(py: Python<'_>, thread_id: ThreadId) {
+    if let Ok(tasklets) = take_global_thread_run_queue(thread_id) {
         for tasklet in tasklets {
             finish_tasklet_for_thread_exit(py, &tasklet);
         }
@@ -1022,7 +1051,7 @@ impl Tasklet {
 
     fn remove(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<PyObject> {
         let tasklet = (&slf).into_py(py);
-        remove_queued_tasklet_by_core_id(slf.core_id, slf.as_ptr());
+        remove_queued_tasklet_by_core_id(slf.owner_thread, slf.core_id, slf.as_ptr());
         if slf.callable.is_some() {
             slf.alive = true;
             slf.paused = true;
@@ -1126,7 +1155,7 @@ impl Tasklet {
             if !slf.continuation_pending || (!func.is_some() && !args_are_bound) {
                 return Err(PyRuntimeError::new_err("can't bind a scheduled tasklet"));
             }
-            remove_queued_tasklet_by_core_id(slf.core_id, tasklet.as_ptr());
+            remove_queued_tasklet_by_core_id(slf.owner_thread, slf.core_id, tasklet.as_ptr());
             slf.scheduled = false;
         }
 
@@ -3116,6 +3145,7 @@ fn borrowed_any_from_ptr<'py>(
 }
 
 fn ensure_thread_cleanup(py: Python<'_>) -> PyResult<()> {
+    CURRENT_THREAD_RUN_QUEUE.with(|_| {});
     THREAD_CLEANUP_GUARD.with(|_| {});
     let Some(thread_dict) =
         (unsafe { Bound::<PyAny>::from_borrowed_ptr_or_opt(py, ffi::PyThreadState_GetDict()) })
@@ -3363,16 +3393,71 @@ fn publish_run_queue_count_change(thread_id: ThreadId, count: usize) {
     }
 }
 
-fn current_thread_core_run_queue_id(create: bool) -> Option<CoreRunQueueId> {
-    let thread_id = current_thread_id();
-    let mut queues = THREAD_RUN_QUEUES
-        .lock()
-        .expect("thread run queue lock poisoned");
-    if let Some(index) = thread_run_queue_index(&queues, thread_id) {
-        return Some(queues[index].core_queue_id);
+fn publish_foreign_run_queue_change(thread_id: ThreadId, count: usize) {
+    FOREIGN_RUN_QUEUE_GENERATION.fetch_add(1, Ordering::AcqRel);
+    publish_run_queue_count_change(thread_id, count);
+}
+
+fn set_seen_foreign_run_queue_generation(generation: u64) {
+    FOREIGN_RUN_QUEUE_SEEN.with(|seen| {
+        *seen.borrow_mut() = generation;
+    });
+}
+
+fn seen_foreign_run_queue_generation() -> u64 {
+    FOREIGN_RUN_QUEUE_SEEN.with(|seen| *seen.borrow())
+}
+
+fn remove_tasklet_object_by_core_id(queue: &mut ThreadRunQueue, core_id: CoreTaskletId) {
+    if let Some(index) = queue
+        .queue
+        .iter()
+        .position(|entry| entry.core_id == core_id)
+    {
+        queue.queue.remove(index);
+        queue.queued_ids.remove(&core_id);
     }
-    if !create {
-        return None;
+}
+
+fn prune_pending_run_queue_removals_for_current() {
+    let thread_id = current_thread_id();
+    let mut removals = PENDING_RUN_QUEUE_REMOVALS
+        .lock()
+        .expect("pending run queue removal lock poisoned");
+    if !removals
+        .iter()
+        .any(|removal| removal.thread_id == thread_id)
+    {
+        return;
+    }
+
+    let mut current_len = None;
+    let _ = CURRENT_THREAD_RUN_QUEUE.try_with(|cell| {
+        let mut queue = cell.borrow_mut();
+        if let Some(queue) = queue.as_mut() {
+            for removal in removals
+                .iter()
+                .filter(|removal| removal.thread_id == thread_id)
+            {
+                remove_tasklet_object_by_core_id(queue, removal.core_id);
+            }
+            current_len = Some(queue.queue.len());
+        }
+    });
+    removals.retain(|removal| removal.thread_id != thread_id);
+    drop(removals);
+
+    if let Some(count) = current_len {
+        publish_run_queue_count_change(thread_id, count);
+    }
+}
+
+fn ensure_global_run_queue_entry_locked(
+    queues: &mut Vec<ThreadRunQueue>,
+    thread_id: ThreadId,
+) -> CoreRunQueueId {
+    if let Some(index) = thread_run_queue_index(queues, thread_id) {
+        return queues[index].core_queue_id;
     }
     let core_queue_id = bridge_core_create_run_queue();
     queues.push(ThreadRunQueue {
@@ -3381,8 +3466,105 @@ fn current_thread_core_run_queue_id(create: bool) -> Option<CoreRunQueueId> {
         queue: VecDeque::new(),
         queued_ids: HashSet::new(),
     });
-    publish_run_queue_count_change(thread_id, 0);
+    core_queue_id
+}
+
+fn ensure_current_thread_run_queue(create: bool) -> Option<CoreRunQueueId> {
+    if let Some(core_queue_id) = CURRENT_THREAD_RUN_QUEUE
+        .with(|cell| cell.borrow().as_ref().map(|queue| queue.core_queue_id))
+    {
+        return Some(core_queue_id);
+    }
+
+    let thread_id = current_thread_id();
+    let mut queues = THREAD_RUN_QUEUES
+        .lock()
+        .expect("thread run queue lock poisoned");
+    if let Some(index) = thread_run_queue_index(&queues, thread_id) {
+        let entry = &mut queues[index];
+        let core_queue_id = entry.core_queue_id;
+        let queue = ThreadRunQueue {
+            thread_id,
+            core_queue_id,
+            queue: std::mem::take(&mut entry.queue),
+            queued_ids: std::mem::take(&mut entry.queued_ids),
+        };
+        let count = queue.queue.len();
+        CURRENT_THREAD_RUN_QUEUE.with(|cell| {
+            *cell.borrow_mut() = Some(queue);
+        });
+        let generation = RUN_QUEUE_GENERATION.load(Ordering::Acquire);
+        set_cached_run_queue_count(generation, count);
+        set_seen_foreign_run_queue_generation(FOREIGN_RUN_QUEUE_GENERATION.load(Ordering::Acquire));
+        return Some(core_queue_id);
+    }
+
+    if !create {
+        return None;
+    }
+
+    let core_queue_id = ensure_global_run_queue_entry_locked(&mut queues, thread_id);
+    drop(queues);
+    CURRENT_THREAD_RUN_QUEUE.with(|cell| {
+        *cell.borrow_mut() = Some(ThreadRunQueue {
+            thread_id,
+            core_queue_id,
+            queue: VecDeque::new(),
+            queued_ids: HashSet::new(),
+        });
+    });
+    let generation = RUN_QUEUE_GENERATION.load(Ordering::Acquire);
+    set_cached_run_queue_count(generation, 0);
+    set_seen_foreign_run_queue_generation(FOREIGN_RUN_QUEUE_GENERATION.load(Ordering::Acquire));
     Some(core_queue_id)
+}
+
+fn merge_foreign_run_queue_for_current() {
+    let foreign_generation = FOREIGN_RUN_QUEUE_GENERATION.load(Ordering::Acquire);
+    if seen_foreign_run_queue_generation() == foreign_generation {
+        prune_pending_run_queue_removals_for_current();
+        return;
+    }
+
+    let thread_id = current_thread_id();
+    let mut merged_count = None;
+    let Ok(()) = CURRENT_THREAD_RUN_QUEUE.try_with(|cell| {
+        let mut current = cell.borrow_mut();
+        if current.is_none() {
+            drop(current);
+            let _ = ensure_current_thread_run_queue(false);
+            current = cell.borrow_mut();
+        }
+        let Some(current) = current.as_mut() else {
+            return;
+        };
+
+        let mut queues = THREAD_RUN_QUEUES
+            .lock()
+            .expect("thread run queue lock poisoned");
+        if let Some(index) = thread_run_queue_index(&queues, thread_id) {
+            let entry = &mut queues[index];
+            while let Some(tasklet) = entry.queue.pop_front() {
+                if current.queued_ids.insert(tasklet.core_id) {
+                    current.queue.push_back(tasklet);
+                }
+            }
+            entry.queued_ids.clear();
+        }
+        merged_count = Some(current.queue.len());
+    }) else {
+        return;
+    };
+    set_seen_foreign_run_queue_generation(foreign_generation);
+    prune_pending_run_queue_removals_for_current();
+    if let Some(count) = merged_count {
+        let generation = RUN_QUEUE_GENERATION.load(Ordering::Acquire);
+        set_cached_run_queue_count(generation, count);
+    }
+}
+
+fn current_thread_core_run_queue_id(create: bool) -> Option<CoreRunQueueId> {
+    ensure_current_thread_run_queue(create)
 }
 
 fn pop_tasklet_object_by_core_id(
@@ -3465,35 +3647,36 @@ fn queue_tasklet_core_for_thread(
     core_id: CoreTaskletId,
     tasklet_object: PyObject,
 ) -> PyResult<()> {
+    if thread_id == current_thread_id() {
+        let core_queue_id = ensure_current_thread_run_queue(true)
+            .expect("current thread run queue should be created");
+        let resulting_len = CURRENT_THREAD_RUN_QUEUE.with(|cell| {
+            let mut queue = cell.borrow_mut();
+            let queue = queue
+                .as_mut()
+                .expect("current thread run queue should exist");
+            move_or_push_queued_tasklet(queue, core_id, tasklet_object);
+            queue.queue.len()
+        });
+        bridge_core_schedule_tasklet_back(core_queue_id, core_id)?;
+        publish_run_queue_count_change(thread_id, resulting_len);
+        return Ok(());
+    }
+
     let resulting_len;
+    let core_queue_id;
     let mut queues = THREAD_RUN_QUEUES
         .lock()
         .expect("thread run queue lock poisoned");
-    if let Some(index) = thread_run_queue_index(&queues, thread_id) {
-        let entry = &mut queues[index];
-        move_or_push_queued_tasklet(entry, core_id, tasklet_object);
-        bridge_core_schedule_tasklet_back(entry.core_queue_id, core_id)?;
-        resulting_len = entry.queue.len();
-    } else {
-        let mut queue = VecDeque::new();
-        queue.push_back(QueuedTasklet {
-            core_id,
-            object: tasklet_object,
-        });
-        let mut queued_ids = HashSet::new();
-        queued_ids.insert(core_id);
-        let core_queue_id = bridge_core_create_run_queue();
-        bridge_core_schedule_tasklet_back(core_queue_id, core_id)?;
-        resulting_len = queue.len();
-        queues.push(ThreadRunQueue {
-            thread_id,
-            core_queue_id,
-            queue,
-            queued_ids,
-        });
-    }
+    core_queue_id = ensure_global_run_queue_entry_locked(&mut queues, thread_id);
+    let index = thread_run_queue_index(&queues, thread_id)
+        .expect("global thread run queue entry should exist");
+    let entry = &mut queues[index];
+    move_or_push_queued_tasklet(entry, core_id, tasklet_object);
+    resulting_len = entry.queue.len();
     drop(queues);
-    publish_run_queue_count_change(thread_id, resulting_len);
+    bridge_core_schedule_tasklet_back(core_queue_id, core_id)?;
+    publish_foreign_run_queue_change(thread_id, resulting_len);
     Ok(())
 }
 
@@ -3504,46 +3687,39 @@ fn queue_tasklet_for_owner(py: Python<'_>, tasklet_object: &PyObject) -> PyResul
 
 fn pop_current_queued_tasklet(_py: Python<'_>) -> PyResult<Option<PyObject>> {
     let thread_id = current_thread_id();
-    let mut queues = THREAD_RUN_QUEUES
-        .lock()
-        .expect("thread run queue lock poisoned");
-    let Some(index) = thread_run_queue_index(&queues, thread_id) else {
+    merge_foreign_run_queue_for_current();
+    let Some(core_queue_id) = ensure_current_thread_run_queue(false) else {
         return Ok(None);
     };
-    let entry = &mut queues[index];
-    let Some(core_id) = bridge_core_pop_next_runnable_tasklet(entry.core_queue_id)? else {
-        let remaining = entry.queue.len();
-        if entry.queue.is_empty() {
-            queues.remove(index);
-        }
-        drop(queues);
+    let Some(core_id) = bridge_core_pop_next_runnable_tasklet(core_queue_id)? else {
+        let remaining = CURRENT_THREAD_RUN_QUEUE
+            .with(|cell| cell.borrow().as_ref().map_or(0, |queue| queue.queue.len()));
         publish_run_queue_count_change(thread_id, remaining);
         return Ok(None);
     };
-    let tasklet = pop_tasklet_object_by_core_id(entry, core_id).ok_or_else(|| {
-        PyRuntimeError::new_err("scheduler core run queue selected a missing Python tasklet")
+    let (tasklet, remaining) = CURRENT_THREAD_RUN_QUEUE.with(|cell| {
+        let mut queue = cell.borrow_mut();
+        let queue = queue
+            .as_mut()
+            .expect("current thread run queue should exist");
+        let tasklet = pop_tasklet_object_by_core_id(queue, core_id).ok_or_else(|| {
+            PyRuntimeError::new_err("scheduler core run queue selected a missing Python tasklet")
+        })?;
+        Ok::<_, PyErr>((tasklet, queue.queue.len()))
     })?;
-    let remaining = entry.queue.len();
-    if entry.queue.is_empty() {
-        queues.remove(index);
-    }
-    drop(queues);
     publish_run_queue_count_change(thread_id, remaining);
     Ok(Some(tasklet))
 }
 
 fn queued_tasklet_count() -> usize {
-    let thread_id = current_thread_id();
     let generation = RUN_QUEUE_GENERATION.load(Ordering::Acquire);
     if let Some(count) = cached_run_queue_count(generation) {
         return count;
     }
-    let count = THREAD_RUN_QUEUES
-        .lock()
-        .expect("thread run queue lock poisoned")
-        .iter()
-        .find(|entry| entry.thread_id == thread_id)
-        .map_or(0, |entry| entry.queue.len());
+    merge_foreign_run_queue_for_current();
+    let generation = RUN_QUEUE_GENERATION.load(Ordering::Acquire);
+    let count = CURRENT_THREAD_RUN_QUEUE
+        .with(|cell| cell.borrow().as_ref().map_or(0, |queue| queue.queue.len()));
     set_cached_run_queue_count(generation, count);
     count
 }
@@ -3552,42 +3728,103 @@ fn executing_tasklet_count() -> usize {
     EXECUTING_TASKLET.with(|tasklet| usize::from(tasklet.borrow().is_some()))
 }
 
-fn remove_queued_tasklet_by_core_id(core_id: CoreTaskletId, target: *mut ffi::PyObject) {
+fn remove_queued_tasklet_by_core_id(
+    owner_thread: ThreadId,
+    core_id: CoreTaskletId,
+    target: *mut ffi::PyObject,
+) {
     let thread_id = current_thread_id();
     bridge_core_remove_runnable_tasklet(core_id);
+
+    let mut current_len = None;
+    if owner_thread == thread_id {
+        CURRENT_THREAD_RUN_QUEUE.with(|cell| {
+            let mut queue = cell.borrow_mut();
+            if let Some(queue) = queue.as_mut() {
+                remove_tasklet_object_by_ptr(queue, target);
+                current_len = Some(queue.queue.len());
+            }
+        });
+    } else {
+        PENDING_RUN_QUEUE_REMOVALS
+            .lock()
+            .expect("pending run queue removal lock poisoned")
+            .push(PendingRunQueueRemoval {
+                thread_id: owner_thread,
+                core_id,
+            });
+    }
+
     let mut queues = THREAD_RUN_QUEUES
         .lock()
         .expect("thread run queue lock poisoned");
     for entry in queues.iter_mut() {
         remove_tasklet_object_by_ptr(entry, target);
     }
-    queues.retain(|entry| !entry.queue.is_empty());
-    let current_len = current_queue_len_from_locked(&queues, thread_id);
+    let global_current_len = current_queue_len_from_locked(&queues, thread_id);
     drop(queues);
-    publish_run_queue_count_change(thread_id, current_len);
+    if owner_thread == thread_id {
+        publish_run_queue_count_change(thread_id, current_len.unwrap_or(global_current_len));
+    } else {
+        publish_foreign_run_queue_change(owner_thread, 0);
+    }
 }
 
 fn remove_queued_tasklet(py: Python<'_>, target: *mut ffi::PyObject) {
     if let Some(object) = borrowed_any_from_ptr(py, target) {
-        if let Ok(core_id) = tasklet_core_id(py, &object.to_object(py)) {
-            remove_queued_tasklet_by_core_id(core_id, target);
+        let object = object.to_object(py);
+        if let Ok(core_id) = tasklet_core_id(py, &object) {
+            let owner_thread = tasklet_owner_thread(py, &object).unwrap_or_else(current_thread_id);
+            remove_queued_tasklet_by_core_id(owner_thread, core_id, target);
             return;
         }
     }
     let thread_id = current_thread_id();
+    let mut current_len = None;
+    CURRENT_THREAD_RUN_QUEUE.with(|cell| {
+        let mut queue = cell.borrow_mut();
+        if let Some(queue) = queue.as_mut() {
+            remove_tasklet_object_by_ptr(queue, target);
+            current_len = Some(queue.queue.len());
+        }
+    });
     let mut queues = THREAD_RUN_QUEUES
         .lock()
         .expect("thread run queue lock poisoned");
     for entry in queues.iter_mut() {
         remove_tasklet_object_by_ptr(entry, target);
     }
-    queues.retain(|entry| !entry.queue.is_empty());
-    let current_len = current_queue_len_from_locked(&queues, thread_id);
+    let global_current_len = current_queue_len_from_locked(&queues, thread_id);
     drop(queues);
-    publish_run_queue_count_change(thread_id, current_len);
+    publish_run_queue_count_change(thread_id, current_len.unwrap_or(global_current_len));
 }
 
 fn take_thread_run_queue(_py: Python<'_>, thread_id: ThreadId) -> PyResult<Vec<PyObject>> {
+    if thread_id == current_thread_id() {
+        merge_foreign_run_queue_for_current();
+        let Some(mut queue) = CURRENT_THREAD_RUN_QUEUE
+            .try_with(|cell| cell.borrow_mut().take())
+            .ok()
+            .flatten()
+        else {
+            publish_run_queue_count_change(thread_id, 0);
+            return Ok(Vec::new());
+        };
+        let core_ids = bridge_core_clear_run_queue(queue.core_queue_id)?;
+        let mut tasklets = Vec::new();
+        for core_id in core_ids {
+            if let Some(tasklet) = pop_tasklet_object_by_core_id(&mut queue, core_id) {
+                tasklets.push(tasklet);
+            }
+        }
+        publish_run_queue_count_change(thread_id, 0);
+        return Ok(tasklets);
+    }
+
+    take_global_thread_run_queue(thread_id)
+}
+
+fn take_global_thread_run_queue(thread_id: ThreadId) -> PyResult<Vec<PyObject>> {
     let mut queues = THREAD_RUN_QUEUES
         .lock()
         .expect("thread run queue lock poisoned");
@@ -3601,7 +3838,7 @@ fn take_thread_run_queue(_py: Python<'_>, thread_id: ThreadId) -> PyResult<Vec<P
             }
         }
         drop(queues);
-        publish_run_queue_count_change(thread_id, 0);
+        publish_foreign_run_queue_change(thread_id, 0);
         Ok(tasklets)
     } else {
         Ok(Vec::new())
@@ -3874,7 +4111,6 @@ fn mark_tasklet_blocked(
             tasklet.blocked_channel = channel;
             tasklet.blocked_direction = direction;
             tasklet.skip_next_channel_callback = false;
-            tasklet.sync_core_state();
         }
     }
 }
@@ -3896,8 +4132,6 @@ fn prepare_tasklet_for_channel_continuation(
             tasklet.blocked_channel = None;
             tasklet.blocked_direction = None;
             tasklet.skip_next_channel_callback = false;
-            bridge_core_pause_tasklet(tasklet.core_id);
-            bridge_core_set_tasklet_block_trap(tasklet.core_id, tasklet.block_trap);
         }
     }
 }
@@ -3928,7 +4162,6 @@ fn prepare_tasklet_for_channel_replay(py: Python<'_>, tasklet_object: &PyObject,
             tasklet.blocked_channel = None;
             tasklet.blocked_direction = None;
             tasklet.skip_next_channel_callback = true;
-            tasklet.sync_core_state();
         }
     }
 }
@@ -3987,7 +4220,6 @@ fn queue_current_tasklet_after_channel_handoff(py: Python<'_>) -> PyResult<bool>
         tasklet.pending_exception = None;
         tasklet.blocked_channel = None;
         tasklet.blocked_direction = None;
-        tasklet.sync_core_state();
     }
     queue_tasklet_for_owner(py, &current)?;
     Ok(true)
@@ -4520,11 +4752,10 @@ fn execute_tasklet_object(py: Python<'_>, tasklet_object: &PyObject) -> PyResult
         tasklet.start_time = monotonic_count();
         tasklet.end_time = 0;
         tasklet.run_time = 0.0;
+        tasklet.sync_core_state();
         if tasklet.callable.is_none() {
-            tasklet.sync_core_state();
             return Err(PyRuntimeError::new_err("tasklet has no callable"));
         }
-        tasklet.sync_core_state();
 
         if has_live_greenlet {
             (None, None, tasklet.pending_exception.take())
@@ -6062,6 +6293,53 @@ assert sender_tasklet.alive is False
             assert_eq!(snapshot.balance, 0);
             assert!(snapshot.blocked_senders.is_empty());
             assert!(snapshot.blocked_receivers.is_empty());
+        });
+    }
+
+    #[test]
+    fn py_current_thread_run_queue_keeps_pyobjects_in_thread_local_registry() {
+        Python::with_gil(|py| {
+            let scheduler = load_legacy_scheduler_module(py).expect("load scheduler package");
+            let locals = PyDict::new_bound(py);
+            locals.set_item("scheduler", &scheduler).unwrap();
+
+            py.run_bound(
+                r#"
+events = []
+def tasklet_body():
+    events.append("ran")
+
+tasklet = scheduler.tasklet(tasklet_body)()
+assert scheduler.getruncount() == 2
+"#,
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("tasklet should schedule into the current thread queue");
+
+            let thread_id = current_thread_id();
+            let current_thread_queue_len = CURRENT_THREAD_RUN_QUEUE
+                .with(|queue| queue.borrow().as_ref().map(|queue| queue.queue.len()));
+            let global_queue_len = THREAD_RUN_QUEUES
+                .lock()
+                .expect("thread run queue lock poisoned")
+                .iter()
+                .find(|queue| queue.thread_id == thread_id)
+                .map(|queue| queue.queue.len());
+
+            assert_eq!(current_thread_queue_len, Some(1));
+            assert_eq!(global_queue_len, Some(0));
+
+            py.run_bound(
+                r#"
+scheduler.run()
+assert events == ["ran"], events
+assert scheduler.getruncount() == 1
+"#,
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("thread-local queue should still drain through CoreScheduler order");
         });
     }
 

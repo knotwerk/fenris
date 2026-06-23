@@ -59,7 +59,10 @@ alive/blocked/scheduled/paused/block_trap/times_switched_to properties and the
 C API times-switched getter now read CoreScheduler snapshots, including the
 legacy transient current-tasklet scheduled flag during `scheduler.schedule()`.
 Python-visible channel preference/closing/closed properties also read
-CoreScheduler snapshots.
+CoreScheduler snapshots. Current-thread runnable PyObject registry storage is
+now thread-local compatibility state while CoreScheduler remains the runnable
+ordering authority; the global run-queue registry is limited to foreign-thread
+handoff.
 Final report readiness still requires that status to become complete
 by making those core snapshots authoritative for remaining lifecycle decisions,
 Python payload handoff, queue identity adapters, callbacks, and broader

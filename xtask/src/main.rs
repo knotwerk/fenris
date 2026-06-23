@@ -2174,6 +2174,7 @@ fn rust_scheduler_python() -> Result<()> {
                 "scheduler core fixture slice has no Python objects",
                 "owner-thread CoreScheduler API exposes Rust-owned CoreTaskletId/CoreChannelId handles for unbuffered channel rendezvous state, balance, blocked sender/receiver queues, preference clamping, close/open/clear, and block-trap no-mutation checks",
                 "CoreScheduler now owns live bridge run-queue handles and scheduled-state authority for FIFO schedule/pop/remove/clear/count behavior per owner thread while carbon-scheduler-python keeps only a CoreTaskletId-to-PyObject registry for callable and Greenlet execution",
+                "carbon-scheduler-python now keeps the current owner-thread runnable PyObject registry in thread-local compatibility storage while CoreScheduler remains the ordering authority; the global run-queue registry is limited to foreign-thread handoff",
                 "CoreScheduler now owns scheduler switch-trap depth per owner run queue and the live PyO3 bridge routes switch_trap() plus trapped schedule/run/channel/switch/raise/kill guards through that core state",
                 "live PyO3 tasklet/channel objects now carry opaque CoreTaskletId/CoreChannelId handles, mirror unbuffered channel balance, preference, block-trap, and blocked sender/receiver queue transitions through CoreScheduler, consume CoreChannelOperationResult sender/receiver IDs, preferred peer-immediate handoff, and balance for covered unbuffered send/receive transfer decisions, use CoreScheduler snapshots for the sender-preferred pre-receive scheduling probe, and use CoreScheduler queue-front results for channel.queue introspection while preserving the legacy Python payload path",
                 "live PyO3 tasklet objects now mirror alive/scheduled/paused/times_switched_to through CoreScheduler tasklet snapshots for setup, run, finish, block, continuation, clear, and kill/exception paths covered by bridge tests; covered bind/remove/insert/switch pause paths use explicit CoreScheduler pause/resume transitions and direct tasklet.run paused eligibility consults the core paused snapshot",
@@ -2182,7 +2183,7 @@ fn rust_scheduler_python() -> Result<()> {
                 "FFI crate owns ABI status/version and panic-containment bootstrap"
             ],
             "still_bridge_owned": [
-                "Python tasklet object still stores callable/args/kwargs, Greenlet continuation state, blocked-channel PyObject links, pending exceptions, kill/continuation flags, and compatibility metrics; CoreScheduler snapshots are not yet authoritative for every lifecycle transition",
+                "Python tasklet object still stores callable/args/kwargs, Greenlet continuation state, blocked-channel PyObject links, pending exceptions, kill/continuation flags, compatibility metrics, and PyObject identity registries needed for callable execution; CoreScheduler snapshots are not yet authoritative for every lifecycle transition",
                 "Python channel object still stores live Python payload/exception transfer behavior, pending message close-state details, and PyObject registries for legacy identity adaptation even though covered unbuffered transfer selection, immediate peer handoff, queue-front selection, and scheduler run-queue order now come from CoreScheduler results",
                 "Python schedule/channel callbacks and refcount/GC/weakref cleanup remain bridge-local"
             ],
@@ -2190,7 +2191,7 @@ fn rust_scheduler_python() -> Result<()> {
         },
             "status": status,
             "report_ready": false,
-            "coverage": "initial_pyo3_cdylib_import_build_flavor_module_package_queuechannel_capi_constructor_property_counter_setup_run_teardown_resource_cleanup_core_run_queue_scheduled_authority_core_pause_resume_lifecycle_authority_core_scheduler_switch_trap_authority_core_tasklet_public_state_getter_authority_core_channel_public_state_getter_authority_full_unchanged_legacy_scheduler_python_suite_expanded_scheduler_h_cxx_binary_tasklet_lifecycle_run_control_channel_preference_invalid_argument_inside_tasklet_channel_send_smoke_real_legacy_tasklet_channel_scheduler_cpp_source_slices_installed_release_wheel_smoke_abi_class_symbol_contract",
+            "coverage": "initial_pyo3_cdylib_import_build_flavor_module_package_queuechannel_capi_constructor_property_counter_setup_run_teardown_resource_cleanup_core_run_queue_scheduled_authority_core_pause_resume_lifecycle_authority_core_scheduler_switch_trap_authority_core_tasklet_public_state_getter_authority_core_channel_public_state_getter_authority_thread_local_current_run_queue_pyobject_registry_full_unchanged_legacy_scheduler_python_suite_expanded_scheduler_h_cxx_binary_tasklet_lifecycle_run_control_channel_preference_invalid_argument_inside_tasklet_channel_send_smoke_real_legacy_tasklet_channel_scheduler_cpp_source_slices_installed_release_wheel_smoke_abi_class_symbol_contract",
         "command": command,
         "package_directory": package_dir
             .as_ref()
@@ -2273,6 +2274,7 @@ fn rust_scheduler_python() -> Result<()> {
             "Python scheduler switch_trap entrypoint and trapped schedule/run/channel/switch/raise/kill paths are backed by CoreScheduler per-run-queue trap state",
             "Python tasklet public lifecycle/scheduling/block-trap/switch-count getters and the tasklet times-switched C API getter are backed by CoreScheduler snapshots even if bridge-local compatibility fields drift",
             "Python channel public preference/closing/closed getters are backed by CoreScheduler snapshots even if bridge-local compatibility fields drift",
+            "Python current-thread runnable PyObject registry is thread-local compatibility storage, with CoreScheduler retaining runnable order and the global registry limited to foreign-thread handoff",
             "Python Greenlet continuations resume scheduler and channel yields in the active bridge tests",
             "Python schedule and channel callback invocation paths match the active legacy smoke expectations",
             "Python tasklet throw, kill, traceback payload, wrong-thread, and thread-exit cleanup smoke paths pass",

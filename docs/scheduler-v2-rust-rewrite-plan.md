@@ -62,8 +62,10 @@ workspace has these useful pieces:
 - `carbon-scheduler-python` mirrors live Python tasklet/channel operations into
   the Rust core, uses core IDs for selected channel/run-queue ordering paths,
   and reads public tasklet/channel lifecycle and public state properties from
-  core snapshots.
-- The Python bridge test suite is locally green at `56/56` tests.
+  core snapshots. Current-thread runnable PyObject registry storage is now
+  thread-local compatibility state while CoreScheduler remains the runnable
+  ordering authority.
+- The Python bridge test suite is locally green at `57/57` tests.
 - The core/trace/FFI tests are locally green at `13/13`, `3/3`, and `1/1`
   respectively.
 - `cargo run -p xtask -- rust-scheduler-python` records the PyO3 bridge as a
@@ -138,7 +140,8 @@ V2 gap:
 Current state:
 
 - The Python bridge uses `BRIDGE_CORE_SCHEDULER: OnceLock<Mutex<CoreScheduler>>`.
-- Thread run queues are still held in a global `Mutex<Vec<ThreadRunQueue>>`.
+- Current-thread runnable PyObject queues are thread-local compatibility state;
+  the global `Mutex<Vec<ThreadRunQueue>>` remains for foreign-thread handoff.
 - Several counters, callbacks, and registries remain process-global statics.
 - Python tasklet/channel objects still carry authoritative Greenlet/PyObject
   payloads and mirrored queue lists.
