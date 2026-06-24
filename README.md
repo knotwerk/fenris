@@ -109,8 +109,6 @@ readiness claims into generated reports.
   and functionality coverage.
 - [reviews/](reviews/) contains review maps, task queues, and source-pair
   analysis used to drive the migration.
-- [docs/archive/](docs/archive/) contains kickoff plans and dated baseline
-  notes. Archived plans are historical context, not the current project state.
 
 ## Licensing
 

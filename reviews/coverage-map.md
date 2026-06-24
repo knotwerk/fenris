@@ -45,7 +45,7 @@ This map defines the tests needed before parity can be claimed. Existing legacy 
 
 | Component | Local status | Notes |
 | --- | --- | --- |
-| `resources` | green | `121/121` CTest tests passed on Linux probe per `docs/archive/baseline/test-harness-status.md`. |
+| `resources` | green | `121/121` CTest tests passed on the local Linux probe; current gate status is tracked in `target/carbon/evidence/legacy-resources.json` and `reviews/report-readiness.md`. |
 | `scheduler` | partial green | The native Linux legacy scheduler baseline now builds on this host and runs the unchanged legacy Python unittest suite (`210` tests, `7` skips) plus `36/36` C API CTest cases. The Rust bridge passes all 210 unchanged legacy scheduler Python unittest cases, an expanded C++ `Scheduler.h` tasklet lifecycle/run-control/channel-preference/invalid-argument/inside-tasklet-send smoke, real legacy `capiTest/*.cpp` source slices in child-process mode, and an installed release-wheel smoke. The new in-process source-slice probe records the current repeated-interpreter failure. Full in-process legacy C API binary tests, broader packaging matrix, and Carbon IO semantic traces remain open before full scheduler parity can be claimed. |
 | `io` | partial green | `cargo run -p xtask -- io-workloads` records TCP/TLS loopback request-cycle stats with five process samples per implementation by default, aggregates request latency samples, validates the timing-free `fixtures/io` normalized semantic trace corpus, and runs the IO-facing `Scheduler.h` channel wake/send_throw semantic smoke. Full legacy `carbonio`/`_socket`/`_ssl` extension semantic trace comparison remains open. |
 

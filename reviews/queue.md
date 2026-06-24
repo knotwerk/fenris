@@ -64,6 +64,6 @@ Status values:
 
 ## Current Gate Notes
 
-- Local `resources` legacy gate is green: `121/121` CTest tests pass according to `docs/archive/baseline/test-harness-status.md`.
+- Local `resources` legacy gate is green: `121/121` CTest tests pass according to current `legacy-resources.json` evidence and `reviews/report-readiness.md`.
 - Local `scheduler` legacy gate is green on the native Linux evidence path: the unchanged legacy Python unittest suite passes with `210` tests and `7` skips, and the C API CTest slice passes `36/36`.
 - Rust migration crates are present as submodules: `carbon-scheduler-rs` and `carbon-resources-rs`. Their broader parity and report-readiness statuses remain governed by `reviews/report-readiness.md` and the evidence JSON under `target/carbon/evidence/`.

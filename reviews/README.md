@@ -13,11 +13,9 @@ open proof obligations.
 | [report-readiness.md](report-readiness.md) | Current gate status for shareable reports. |
 | [coverage-map.md](coverage-map.md) | Feature and fixture coverage map. |
 | [optimization-map.md](optimization-map.md) | Optimization opportunities and evidence requirements. |
-| [performance-map.md](performance-map.md) | Benchmark evidence and allowed performance claims. |
 | [scheduler-cpp-baseline-note.md](scheduler-cpp-baseline-note.md) | Positioning note for the optimized legacy C++ scheduler baseline. |
 | [queue.md](queue.md) | Ordered pair-review queue. |
 | [findings.jsonl](findings.jsonl) | Machine-readable consolidated findings. |
 | [pairs/](pairs/) | Pairwise legacy-to-Rust review notes by subsystem. |
 
-The generated report should cite evidence JSON and these review maps, not the
-archived planning docs directly.
+The generated report should cite evidence JSON and these current review maps.
