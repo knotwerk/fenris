@@ -2191,25 +2191,32 @@ fn rust_scheduler_python() -> Result<()> {
                 "semantic fixture runner uses Rust-owned scheduler/channel/tasklet identifiers",
                 "scheduler core fixture slice has no Python objects",
                 "owner-thread CoreScheduler API exposes Rust-owned CoreTaskletId/CoreChannelId handles for unbuffered channel rendezvous state, balance, blocked sender/receiver queues, single blocked-queue membership rejection, preference clamping, close/open/clear, block-trap no-mutation checks, and kill/pending-exit state with blocked-channel cleanup plus dead-tasklet no-op behavior",
-                "CoreScheduler now owns live bridge run-queue handles and scheduled-state authority for FIFO schedule/pop/remove/clear/count behavior per owner thread while carbon-scheduler-python keeps only a CoreTaskletId-to-PyObject registry for callable and Greenlet execution",
+                "CoreScheduler now owns live bridge run-queue handles, per-run-queue current-tasklet identity, and scheduled-state authority for FIFO schedule/pop/remove/clear/count behavior per owner thread, and Python/C API public run-count reads CoreScheduler runnable counts instead of bridge-local PyObject registry length while carbon-scheduler-python keeps only a CoreTaskletId-keyed PyObject identity adapter for callable and Greenlet execution",
+                "CoreScheduler now owns public active/all-time tasklet lifetime counters for Python get_active_tasklet_count/get_all_time_tasklet_count and C API PyScheduler_GetActiveTaskletCount/PyScheduler_GetAllTimeTaskletCount; carbon-scheduler-python no longer stores a bridge-local counted-active flag and only signals Python object construction/destruction",
+                "CoreScheduler now owns public active schedule-manager lifetime counters for Python get_number_of_active_schedule_managers and C API PyScheduler_GetNumberOfActiveScheduleManagers while carbon-scheduler-python only signals thread-local schedule-manager cache construction/destruction",
+                "CoreScheduler now owns public active channel lifetime counters for Python get_number_of_active_channels and C API PyScheduler_GetNumberOfActiveChannels while carbon-scheduler-python only signals Python channel construction/destruction",
+                "CoreScheduler now owns public last-timeout completed/switched counters for C API PyScheduler_GetTaskletsCompletedLastRunWithTimeout and PyScheduler_GetTaskletsSwitchedLastRunWithTimeout while carbon-scheduler-python only signals RunWithTimeout progress",
+                "CoreScheduler now owns the public nested-tasklet mode for Python set_use_nested_tasklets/get_use_nested_tasklets while carbon-scheduler-python only forwards compatibility API calls",
+                "CoreScheduler now rejects cyclic tasklet parent graphs, including self-parent and ancestor-cycle reparenting, before mutating Rust-owned parent identity",
+                "CoreScheduler now owns public schedule callback, fast-schedule callback, per-run-queue channel callback registration state, schedule-callback dispatch identity/enable metadata for previous/next tasklet switch points, and the tasklet one-shot channel-callback skip decision while carbon-scheduler-python stores only the Python callable or C function pointer needed to invoke the compatibility API",
                 "carbon-scheduler-python now keeps the current owner-thread runnable PyObject registry in thread-local compatibility storage while CoreScheduler remains the ordering authority; the global run-queue registry is limited to foreign-thread handoff",
                 "CoreScheduler now owns scheduler switch-trap depth per owner run queue and the live PyO3 bridge routes switch_trap() plus trapped schedule/run/channel/switch/raise/kill guards through that core state",
-                "live PyO3 tasklet/channel objects now carry opaque CoreTaskletId/CoreChannelId handles, mirror unbuffered channel balance, preference, block-trap, and blocked sender/receiver queue transitions through CoreScheduler, consume CoreChannelOperationResult sender/receiver IDs, core-minted payload handoff tokens, preferred peer-immediate handoff, and balance for covered unbuffered send/receive transfer decisions, use CoreScheduler snapshots for the sender-preferred pre-receive scheduling probe, and use CoreScheduler queue-front results for channel.queue introspection while preserving bridge-local Python payload object storage",
-                "live PyO3 tasklet objects now mirror alive/scheduled/paused/times_switched_to through CoreScheduler tasklet snapshots for setup, run, finish, block, continuation, clear, and kill/exception paths covered by bridge tests; covered blocked send/receive tasklet state projection, live channel-continuation scheduled/paused projection, current-tasklet channel handoff requeue projection, and schedule_remove pause projection apply CoreScheduler snapshots instead of hand-writing local lifecycle flags, covered bind/remove/insert/switch pause paths use explicit CoreScheduler pause/resume transitions, direct tasklet.run paused eligibility consults the core paused snapshot, and blocked receive/send throw cleanup resolves blocked channel/direction from CoreScheduler snapshots instead of tasklet-local channel pointers",
-                "Python-visible tasklet alive/blocked/scheduled/paused/block_trap/times_switched_to properties, public tasklet call/setup/insert/run/switch/bind/unbind/dont_raise invalid-state guards, the current-tasklet block_trap guard used by channel operations, and the C API times_switched_to/block_trap getters now read CoreScheduler snapshots, including the legacy transient current-tasklet scheduled flag during scheduler.schedule(); insert avoids resyncing stale bridge lifecycle fields when the core already owns the scheduled state",
-                "Python-visible channel preference/closing/closed properties now read CoreScheduler snapshots, while core-owned payload tokens select bridge-local Python payload objects for send/receive, exception replay, and blocked-sender cleanup paths",
+                "live PyO3 tasklet/channel objects now carry opaque CoreTaskletId/CoreChannelId handles, route unbuffered channel balance, preference, block-trap, and blocked sender/receiver queue transitions through CoreScheduler, consume CoreChannelOperationResult sender/receiver IDs, core-minted payload handoff tokens, preferred peer-immediate handoff, and balance for covered unbuffered send/receive transfer decisions, use CoreScheduler snapshots for the sender-preferred pre-receive scheduling probe, use CoreScheduler queue-front results for channel.queue introspection, and use a CoreChannelId-keyed channel object identity adapter while selecting Python payload/exception objects from a CorePayloadToken-keyed bridge registry outside Channel objects and preserving CoreTaskletId-to-PyObject blocked-tasklet lifetime refs; Python channel objects no longer keep bridge-local Rust blocked sender/receiver queue fields, payload maps, balance, preference, closing, or closed fields",
+                "live PyO3 tasklet objects now mirror main-tasklet identity, per-run-queue current-tasklet identity, parent identity, alive/scheduled/paused/times_switched_to, startTime/endTime/runTime timing metrics, callable-bound state, bound-argument state, dont_raise exception-suppression state, highlighted state, context state, method/module/file/line/parent-callsite metadata, tasklet continuation/kill delivery flags, and channel-callback one-shot skip state through CoreScheduler state for setup, run, finish, block, continuation, clear, callback, and kill/exception paths covered by bridge tests; Python tasklet objects no longer keep bridge-local Rust blocked, block-trap, callable-bound, or args-bound booleans and no longer keep bridge-local Rust timing metric fields or a bridge-local Rust switch-count field; public blocked state reads CoreScheduler blocked_on snapshots directly, block_trap getters/setters read and write CoreScheduler snapshots directly, callable-bound guards read CoreScheduler snapshots while PyO3 keeps only the Python callable payload needed for execution, and bound-argument guards read CoreScheduler snapshots while PyO3 keeps only the Python args/kwargs payloads needed for callable execution; covered blocked send/receive tasklet state projection, live channel-continuation scheduled/paused and delivery-state projection, current-tasklet channel handoff requeue projection, schedule_remove pause projection, C API alive reads, dead-tasklet kill no-op decisions, timeout completion accounting, paused direct-run eligibility, call/setup/insert callable-bound guards, timing getter/setter reconciliation, dont_raise getter/setter and exception suppression, highlighted getter/setter reconciliation, context getter/setter/C API reconciliation, callsite metadata getter/setter reconciliation, and dont_raise bound-argument guards apply CoreScheduler snapshots instead of hand-writing local lifecycle flags, covered bind/remove/insert/switch pause paths use explicit CoreScheduler pause/resume transitions, and blocked receive/send throw cleanup resolves blocked channel/direction from CoreScheduler snapshots instead of tasklet-local channel pointers",
+                "Python-visible tasklet is_main/is_current/parent/alive/blocked/scheduled/paused/block_trap/times_switched_to/startTime/endTime/runTime/dont_raise/highlighted/context/method_name/module_name/file_name/line_number/parent_callsite properties, public scheduler getcurrent/getmain and C API PyScheduler_GetCurrent, public tasklet call/setup/insert/run/switch/bind/unbind/dont_raise invalid-state guards, the current-tasklet block_trap guard used by channel operations, and the C API PyTasklet_IsMain/PyTasklet_Alive/times_switched_to/block_trap/context getters now read CoreScheduler identity/state, callable-bound snapshots, bound-argument snapshots, timing snapshots, dont_raise snapshots, highlighted snapshots, context snapshots, and callsite metadata snapshots, including the legacy transient current-tasklet scheduled flag during scheduler.schedule(); insert avoids resyncing stale bridge lifecycle fields when the core already owns the scheduled state",
+                "Python-visible channel balance/preference/closing/closed properties plus C API channel balance/preference access now read CoreScheduler snapshots and write preference through CoreScheduler with no bridge-local Rust channel balance, preference, closing, or closed fields, while core-owned payload tokens select bridge-local Python payload objects for send/receive, exception replay, and blocked-sender cleanup paths",
                 "FFI crate owns ABI status/version and panic-containment bootstrap"
             ],
             "still_bridge_owned": [
-                "Python tasklet object still stores callable/args/kwargs, Greenlet continuation state, pending exceptions, Python delivery flags for kill/continuation paths, compatibility metrics, and PyObject identity registries needed for callable execution; CoreScheduler snapshots are not yet authoritative for every Greenlet lifecycle transition beyond covered blocked send/receive projection, live channel-continuation projection, current-tasklet channel handoff requeue projection, schedule_remove pause projection, and public call/setup/insert/run/switch/bind/unbind/dont_raise guards",
-                "Python channel object still stores live Python payload/exception objects, pending message close-state details, and PyObject registries for legacy identity adaptation even though covered unbuffered transfer selection, payload-token handoff/removal identity, immediate peer handoff, queue-front selection, and scheduler run-queue order now come from CoreScheduler results",
-                "Python schedule/channel callbacks and broader refcount/GC/weakref cleanup remain bridge-local; schedule-manager wrapper refcount/weakref/thread-cache teardown and selected tasklet/channel refcount smokes are covered by targeted bridge tests"
+                "Python tasklet object still stores the actual callable/args/kwargs, Greenlet continuation objects, pending Python exception objects, context-manager and exception-handler PyObjects, and PyObject identity registries needed for callable execution; CoreScheduler snapshots are not yet authoritative for every Greenlet lifecycle transition beyond covered callable-bound guards, bound-argument guards, dont_raise behavior, highlighted state, context state, callsite metadata, timing getter/setter reconciliation, blocked send/receive projection, live channel-continuation delivery projection, current-tasklet channel handoff requeue projection, schedule_remove pause projection, and public call/setup/insert/run/switch/bind/unbind/dont_raise guards",
+                "PyO3 bridge still stores live Python payload/exception objects in a CorePayloadToken-keyed registry plus PyObject registries for legacy identity adaptation and blocked-tasklet lifetime refs even though covered unbuffered transfer selection, payload-token handoff/removal identity, immediate peer handoff, blocked sender/receiver queue order, queue-front selection, balance/preference/closing/closed state, and scheduler run-queue order now come from CoreScheduler results; Channel objects no longer own the payload map",
+                "Python callback callable/function-pointer storage, actual callback invocation, and broader refcount/GC/weakref cleanup remain bridge-local even though callback registration, schedule-callback dispatch metadata, and the tasklet one-shot channel-callback skip decision are core-owned; schedule-manager wrapper refcount/weakref/thread-cache teardown and selected tasklet/channel refcount smokes are covered by targeted bridge tests"
             ],
-            "migration_blocker": "make CoreScheduler tasklet/channel snapshots authoritative for remaining lifecycle decisions and queue identity adapters while leaving PyO3 as a compatibility wrapper for Python callables, exceptions, and PyObject payload storage"
+            "migration_blocker": "make CoreScheduler tasklet/channel snapshots authoritative for remaining lifecycle decisions and PyObject identity adapters while leaving PyO3 as a compatibility wrapper for Python callables, exceptions, and PyObject payload storage"
         },
             "status": status,
             "report_ready": false,
-            "coverage": "initial_pyo3_cdylib_import_build_flavor_module_package_queuechannel_capi_constructor_property_counter_setup_run_teardown_resource_cleanup_core_run_queue_scheduled_authority_core_pause_resume_lifecycle_authority_core_scheduler_switch_trap_authority_core_blocked_membership_invariant_core_tasklet_kill_pending_exit_authority_core_tasklet_public_state_getter_authority_core_channel_public_state_getter_authority_thread_local_current_run_queue_pyobject_registry_full_unchanged_legacy_scheduler_python_suite_expanded_scheduler_h_cxx_binary_tasklet_lifecycle_run_control_channel_preference_invalid_argument_inside_tasklet_channel_send_smoke_real_legacy_tasklet_channel_scheduler_cpp_source_slices_installed_release_wheel_smoke_abi_class_symbol_contract",
+            "coverage": "initial_pyo3_cdylib_import_build_flavor_module_package_queuechannel_capi_constructor_property_counter_setup_run_teardown_resource_cleanup_core_run_queue_scheduled_authority_core_current_tasklet_identity_authority_core_public_run_count_authority_core_tasklet_lifetime_counter_authority_core_tasklet_no_bridge_counted_active_flag_authority_core_active_schedule_manager_counter_authority_core_active_channel_counter_authority_core_timeout_counter_authority_core_nested_tasklet_mode_authority_core_tasklet_parent_cycle_guard_core_schedule_callback_registration_authority_core_schedule_callback_dispatch_authority_core_channel_callback_registration_authority_core_tasklet_channel_callback_skip_authority_core_tasklet_main_identity_authority_core_tasklet_parent_identity_authority_core_tasklet_callable_bound_authority_core_tasklet_no_bridge_callable_bound_flag_authority_core_tasklet_args_bound_authority_core_tasklet_no_bridge_args_bound_flag_authority_core_tasklet_no_bridge_block_trap_flag_authority_core_tasklet_dont_raise_authority_core_tasklet_highlighted_authority_core_tasklet_context_authority_core_tasklet_callsite_metadata_authority_core_tasklet_timing_metric_authority_core_tasklet_no_bridge_timing_metric_fields_authority_core_tasklet_no_bridge_switch_count_field_authority_core_tasklet_no_bridge_blocked_mirror_authority_core_tasklet_lifecycle_decision_authority_core_tasklet_delivery_state_authority_core_pause_resume_lifecycle_authority_core_scheduler_switch_trap_authority_core_blocked_membership_invariant_core_tasklet_kill_pending_exit_authority_core_tasklet_public_state_getter_authority_core_tasklet_identity_adapter_core_id_keyed_authority_core_channel_identity_adapter_core_id_keyed_authority_core_channel_public_state_getter_authority_core_channel_no_bridge_blocked_queue_fields_authority_core_channel_no_channel_object_payload_store_authority_core_channel_no_bridge_balance_field_authority_core_channel_no_bridge_preference_close_state_fields_authority_thread_local_current_run_queue_pyobject_registry_full_unchanged_legacy_scheduler_python_suite_expanded_scheduler_h_cxx_binary_tasklet_lifecycle_run_control_channel_preference_invalid_argument_inside_tasklet_channel_send_smoke_real_legacy_tasklet_channel_scheduler_cpp_source_slices_installed_release_wheel_smoke_abi_class_symbol_contract",
         "command": command,
         "package_directory": package_dir
             .as_ref()
@@ -2290,8 +2297,32 @@ fn rust_scheduler_python() -> Result<()> {
             "Python-level channel send_exception/send_throw validation wrapper path matches the active legacy smoke expectations",
             "Python-level switch/raise/kill scheduler paths match the active legacy smoke expectations",
             "Python scheduler switch_trap entrypoint and trapped schedule/run/channel/switch/raise/kill paths are backed by CoreScheduler per-run-queue trap state",
-            "Python tasklet public lifecycle/scheduling/block-trap/switch-count getters and the tasklet times-switched C API getter are backed by CoreScheduler snapshots even if bridge-local compatibility fields drift",
-            "Python channel public preference/closing/closed getters are backed by CoreScheduler snapshots even if bridge-local compatibility fields drift",
+            "Python scheduler getruncount/calculateruncount and C API PyScheduler_GetRunCount read CoreScheduler run-queue counts, with bridge-local PyObject registry drift covered by a unit test",
+            "Python scheduler get_active_tasklet_count/get_all_time_tasklet_count and C API PyScheduler_GetActiveTaskletCount/PyScheduler_GetAllTimeTaskletCount read CoreScheduler lifetime counters; tasklet destruction always delegates retirement to CoreScheduler with no bridge-local counted-active flag",
+            "Python scheduler get_number_of_active_schedule_managers and C API PyScheduler_GetNumberOfActiveScheduleManagers read CoreScheduler active schedule-manager counters, with thread-local cache construction/destruction covered by a unit test",
+            "Python scheduler get_number_of_active_channels and C API PyScheduler_GetNumberOfActiveChannels read CoreScheduler active channel counters, with bridge-local initialized flag drift covered by a unit test",
+            "C API PyScheduler_GetTaskletsCompletedLastRunWithTimeout and PyScheduler_GetTaskletsSwitchedLastRunWithTimeout read CoreScheduler last-timeout counters, with non-timeout scheduler runs preserving the last RunWithTimeout values",
+            "Python scheduler set_use_nested_tasklets/get_use_nested_tasklets read and write CoreScheduler nested-tasklet mode state, with direct core-state changes reflected by the public getter",
+            "Python scheduler getcurrent/is_current and C API PyScheduler_GetCurrent resolve the current owner-thread tasklet through CoreScheduler per-run-queue current-tasklet identity while PyO3 retains only the compatibility PyObject registry",
+            "Python scheduler set_schedule_callback/get_schedule_callback and C API PyScheduler_SetScheduleFastCallback registration state is backed by CoreScheduler, with direct core-state changes reflected by the public schedule callback getter",
+            "Python schedule callback dispatch now asks CoreScheduler for previous/next tasklet identity plus Python and fast-C enable decisions before PyO3 resolves callable/function-pointer storage and invokes compatibility callbacks",
+            "Python scheduler set_channel_callback/get_channel_callback and C API PyScheduler_SetChannelCallback registration state is backed by per-run-queue CoreScheduler state, with direct core-state changes reflected by the public channel callback getter",
+            "Python tasklet public main-identity/parent-identity/lifecycle/scheduling/block-trap/switch-count getters and the tasklet PyTasklet_IsMain/PyTasklet_Alive/times-switched C API getters are backed by CoreScheduler snapshots with no bridge-local Rust switch-count field",
+            "Python tasklet blocked state has no bridge-local Rust boolean mirror; public tasklet.blocked and blocked run/switch guards read CoreScheduler blocked_on snapshots",
+            "Python tasklet callable-bound state has no bridge-local Rust callable-bound flag; call/setup/insert invalid-state guards read CoreScheduler snapshots even when the PyO3 tasklet still stores a local Python callable object for execution",
+            "Python tasklet bound-argument state has no bridge-local Rust args-bound flag; dont_raise invalid-state guards read CoreScheduler snapshots even when the PyO3 tasklet still stores local Python args/kwargs objects for execution",
+            "Python tasklet block_trap state has no bridge-local Rust block-trap flag; public block_trap getter/setter and C API PyTasklet_GetBlockTrap/PyTasklet_SetBlockTrap read and write CoreScheduler snapshots directly",
+            "Python tasklet dont_raise getter/setter state and exception-suppression behavior are backed by CoreScheduler snapshots while PyO3 keeps only the optional Python context-manager and exception-handler callables",
+            "Python tasklet highlighted getter/setter state is backed by CoreScheduler snapshots even if bridge-local compatibility fields drift",
+            "Python tasklet context getter/setter state and C API PyTasklet_GetContext are backed by CoreScheduler snapshots even if bridge-local compatibility fields drift",
+            "Python tasklet method/module/file/line and parent_callsite metadata getters/setter are backed by CoreScheduler snapshots even if bridge-local compatibility fields drift",
+            "Python tasklet startTime/endTime/runTime getters and runTime setter are backed by CoreScheduler timing snapshots with no bridge-local Rust timing metric fields; tasklet execution start/finish and the runTime setter write CoreScheduler timing snapshots directly",
+            "Python tasklet continuation/kill delivery flags, dead-tasklet kill no-op decisions, timeout completion accounting, and paused direct-run eligibility are backed by CoreScheduler snapshots, with direct core-state changes reflected by bridge execution decisions",
+            "Python tasklet object identity lookup is keyed by CoreTaskletId and rejects mismatched tasklet pointers before adapting core-selected parent/current/queue results back to PyObjects",
+            "Python channel blocked sender/receiver queue order, channel.queue, and C API PyChannel_GetQueue selection are backed by CoreScheduler snapshots with no bridge-local Rust channel blocked sender/receiver queue fields; PyO3 keeps only CoreTaskletId-to-PyObject blocked-tasklet refs for compatibility lifetimes",
+            "Python channel object identity lookup is keyed by CoreChannelId and rejects mismatched channel pointers before adapting core-selected blocked-channel cleanup results back to PyObjects",
+            "Python channel public balance/preference/closing/closed getters and C API PyChannel_GetBalance/PyChannel_GetPreference/PyChannel_SetPreference are backed by CoreScheduler snapshots with no bridge-local Rust channel balance, preference, closing, or closed fields",
+            "Python channel payload/exception objects are stored in a CorePayloadToken-keyed bridge registry outside Channel objects; core-owned payload tokens drive send/receive, exception replay, and blocked-sender cleanup, with no per-Channel payload map",
             "Python current-thread runnable PyObject registry is thread-local compatibility storage, with CoreScheduler retaining runnable order and the global registry limited to foreign-thread handoff",
             "Python Greenlet continuations resume scheduler and channel yields in the active bridge tests",
             "Python schedule and channel callback invocation paths match the active legacy smoke expectations",
@@ -2316,7 +2347,7 @@ fn rust_scheduler_python() -> Result<()> {
             "all ten unchanged legacy test_queuechannel.py tests pass against the Rust extension, including buffered sends, queue length/balance, queued data, blocking receive wakeup, queued exception/throw, main-tasklet empty receive error, nested blocked receiver order, block-trap receive rejection, and main receive drain",
             "SchedulerTestCaseBase resource cleanup is guarded for active manager/channel counters, schedule-manager refcount lifecycle, and tasklet C API lifetime counters",
             "channel preference property accepts legacy -1/0/1 values",
-            "nested tasklet global flag round trips",
+            "nested-tasklet mode API round trips through CoreScheduler state",
             "legacy block_trap context manager toggles the stable current tasklet flag",
             "Python test binary embeds local Python library rpath for cargo test"
         ],
@@ -5251,7 +5282,7 @@ fn bench_scheduler_architecture(args: Vec<String>) -> Result<()> {
         "coverage": "target_architecture_no_python_core_scheduler_and_rust_owned_tasklet_workload_comparison",
         "comparability": "rust_bridge_vs_native_no_python_same_pressure_shape_architecture_probe",
         "claim_eligibility": "architecture_evidence_only_no_legacy_speedup_claim",
-        "claim_scope": "Compares the Rust scheduler Python bridge with same-pressure native CoreScheduler hot-path rows that remove Python, Greenlet, PyO3, and refcount work. This estimates the upside of pushing scheduler execution into Rust; it is not a same-API legacy comparison or production game-environment claim.",
+        "claim_scope": "Compares the Rust scheduler Python bridge with same-pressure native CoreScheduler hot-path rows that replace Python/Greenlet hot-path objects with Rust-owned continuation/process state machines. This estimates the upside of pushing scheduler execution into Rust; it is not a same-API legacy comparison or production game-environment claim.",
         "command": format!(
             "cargo run -p xtask -- bench-scheduler-architecture --tier {} --samples {}",
             config.tier.as_str(),
@@ -5273,8 +5304,8 @@ fn bench_scheduler_architecture(args: Vec<String>) -> Result<()> {
         "test_definition": {
             "what_is_tested": "tasklet scheduling, channel rendezvous, fanout tasklet pipelines, and synthetic zone-tick orchestration as scheduler work, not file-copy throughput",
             "bridge_lane": "Rust scheduler compatibility bridge through the same Python tasklet/channel API, measured in scheduler-comparison.json",
-            "native_lane": "Rust CoreScheduler called directly with Rust-owned tasklets, channels, run queues, domain-style wakeups, fanout workers, and zone-tick work units",
-            "architecture_change": "remove Python objects, Python tasklet bodies, Greenlets, PyO3 object access, Python refcounting, and compatibility callback paths from the scheduler hot loop",
+            "native_lane": "Rust CoreScheduler called directly with Rust-owned tasklets, channels, run queues, explicit continuation/process records, domain-style wakeups, fanout workers, and zone-tick work units",
+            "architecture_change": "replace Python objects, Python tasklet bodies, Greenlets, PyO3 object access, Python refcounting, and compatibility callback paths in the hot loop with Rust-owned task/process state machines plus explicit scheduler IDs",
             "why_this_exists": "the migration target is not merely a Rust implementation hidden behind Python; it is a scheduler architecture where tasklet dispatch, wakeups, channel matching, and selected tasklet work can be owned by Rust in the hot path",
             "not_claiming": [
                 "not a same-API legacy scheduler speedup claim",
@@ -5522,7 +5553,7 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             "status": if native_scheduler_rows > 0 { "native_no_python_scheduler_rows_sampled" } else { "native_no_python_scheduler_rows_not_sampled" },
             "row_count": native_scheduler_rows,
             "architecture_comparison_count": architecture_comparisons.len(),
-            "reason": "Native scheduler rows exercise CoreScheduler directly with Rust-owned tasklets, channels, run queues, domain-style wakeups, fanout workers, and synthetic zone-tick work units. They intentionally remove Python tasklet bodies, Greenlet, PyO3, and refcount work from the hot path, so they are target-architecture probes rather than same-API legacy comparisons."
+            "reason": "Native scheduler rows exercise CoreScheduler directly with Rust-owned tasklets, channels, run queues, explicit continuation/process records, domain-style wakeups, fanout workers, and synthetic zone-tick work units. They intentionally replace Python tasklet bodies, Greenlet, PyO3, and refcount work in the hot path with Rust-owned state machines, so they are target-architecture probes rather than same-API legacy comparisons."
         },
         "architecture_comparison_summary": architecture_comparison_summary,
         "architecture_comparisons": architecture_comparisons,
@@ -6573,11 +6604,18 @@ fn scheduler_architecture_comparison_row(
         "pressure": native.get("pressure").cloned().unwrap_or(Value::Null),
         "comparability": "rust_bridge_vs_native_no_python_same_pressure_shape_architecture_probe",
         "claim_eligibility": "architecture_evidence_only_no_legacy_speedup_claim",
-        "claim_scope": "Compares the Rust scheduler Python bridge with a same-pressure Rust CoreScheduler hot path that removes Python, Greenlet, PyO3, and refcount work. This estimates target-architecture upside; it is not a same-API legacy comparison or production game-environment claim.",
+        "claim_scope": "Compares the Rust scheduler Python bridge with a same-pressure Rust CoreScheduler hot path that replaces Python/Greenlet hot-path objects with Rust-owned continuation/process state machines. This estimates target-architecture upside; it is not a same-API legacy comparison or production game-environment claim.",
         "bridge_implementation": bridge.get("rust_implementation").cloned().unwrap_or_else(|| json!("rust_scheduler_python_bridge")),
         "native_implementation": native.get("implementation").cloned().unwrap_or_else(|| json!("rust_core_scheduler_native_no_python")),
         "no_python_hot_path": native.get("no_python_hot_path").cloned().unwrap_or_else(|| json!(false)),
         "architecture_lane": native.get("architecture_lane").cloned().unwrap_or(Value::Null),
+        "native_continuation_model": native.get("continuation_model").cloned().unwrap_or(Value::Null),
+        "native_continuation_state_shape": native.get("continuation_state_shape").cloned().unwrap_or(Value::Null),
+        "native_continuation_count": native.get("continuation_count").cloned().unwrap_or(Value::Null),
+        "native_continuation_transition_count": native.get("continuation_transition_count").cloned().unwrap_or(Value::Null),
+        "native_continuation_state_bytes": native.get("continuation_state_bytes").cloned().unwrap_or(Value::Null),
+        "native_continuation_checksum": native.get("continuation_checksum").cloned().unwrap_or(Value::Null),
+        "native_equivalence_note": native.get("native_equivalence_note").cloned().unwrap_or(Value::Null),
         "bridge_comparable_metric": bridge_comparable_metric,
         "native_comparable_metric": native_comparable_metric,
         "bridge_comparable_throughput_per_sec": bridge_comparable_value,
@@ -6628,7 +6666,7 @@ fn scheduler_architecture_comparison_summary(comparisons: &[Value]) -> Value {
         "best_native_over_bridge_comparable_throughput_ratio": comparable_ratios.iter().copied().reduce(f64::max),
         "worst_native_over_bridge_comparable_throughput_ratio": comparable_ratios.iter().copied().reduce(f64::min),
         "geomean_bridge_over_native_p99_ratio": geomean_f64(&p99_ratios),
-        "claim_scope": "Target-architecture comparison only: Rust bridge compatibility path versus native no-Python CoreScheduler hot path for matching pressure shapes."
+        "claim_scope": "Target-architecture comparison only: Rust bridge compatibility path versus native CoreScheduler hot path with Rust-owned continuation/process state for matching pressure shapes."
     })
 }
 
@@ -6732,6 +6770,132 @@ fn bench_scalability_native_scheduler_worker(args: &[String]) -> Result<Value> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeContinuationState {
+    Runnable,
+    Waiting,
+    Running,
+    Complete,
+}
+
+#[derive(Debug, Clone)]
+struct NativeContinuation {
+    tasklet: CoreTaskletId,
+    slot: u64,
+    state: NativeContinuationState,
+    generation: u64,
+    resume_point: u32,
+    domain: u16,
+    parent_slot: Option<u32>,
+    mailbox_word: u64,
+    payload_word: u64,
+    wake_count: u64,
+    completed_count: u64,
+}
+
+impl NativeContinuation {
+    fn new(tasklet: CoreTaskletId, slot: usize, parent_slot: Option<usize>) -> Self {
+        Self {
+            tasklet,
+            slot: slot as u64,
+            state: NativeContinuationState::Runnable,
+            generation: 0,
+            resume_point: 0,
+            domain: (slot % 65_535) as u16,
+            parent_slot: parent_slot.map(|value| value as u32),
+            mailbox_word: slot as u64,
+            payload_word: 0,
+            wake_count: 0,
+            completed_count: 0,
+        }
+    }
+
+    fn schedule(&mut self, tick: u64, payload: u64) -> u64 {
+        self.state = NativeContinuationState::Runnable;
+        self.generation = self.generation.wrapping_add(1);
+        self.resume_point = self.resume_point.wrapping_add(1);
+        self.payload_word = payload;
+        self.mailbox_word = self
+            .mailbox_word
+            .rotate_left(7)
+            .wrapping_add(tick)
+            .wrapping_add(payload)
+            .wrapping_add(u64::from(self.domain));
+        1
+    }
+
+    fn block(&mut self, tick: u64, channel_word: u64) -> u64 {
+        self.state = NativeContinuationState::Waiting;
+        self.resume_point = self.resume_point.wrapping_add(3);
+        self.mailbox_word ^= channel_word
+            .wrapping_add(tick.rotate_left(11))
+            .wrapping_add(self.slot);
+        1
+    }
+
+    fn wake(&mut self, tick: u64, payload: u64) -> u64 {
+        self.state = NativeContinuationState::Runnable;
+        self.wake_count = self.wake_count.wrapping_add(1);
+        self.payload_word = payload;
+        self.mailbox_word = self
+            .mailbox_word
+            .wrapping_mul(1_099_511_628_211)
+            .wrapping_add(payload)
+            .wrapping_add(tick);
+        1
+    }
+
+    fn resume(&mut self, tick: u64) -> u64 {
+        self.state = NativeContinuationState::Running;
+        self.resume_point = self.resume_point.wrapping_add(5);
+        self.mailbox_word = self
+            .mailbox_word
+            .rotate_left(13)
+            .wrapping_add(self.payload_word)
+            .wrapping_add(tick);
+        1
+    }
+
+    fn complete(&mut self, tick: u64) -> u64 {
+        self.state = NativeContinuationState::Complete;
+        self.completed_count = self.completed_count.wrapping_add(1);
+        self.resume_point = self.resume_point.wrapping_add(7);
+        self.mailbox_word = self
+            .mailbox_word
+            .wrapping_add(self.completed_count.rotate_left(17))
+            .wrapping_add(tick);
+        1
+    }
+
+    fn checksum_word(&self) -> u64 {
+        let _tasklet_identity = self.tasklet;
+        let state = match self.state {
+            NativeContinuationState::Runnable => 1_u64,
+            NativeContinuationState::Waiting => 2,
+            NativeContinuationState::Running => 3,
+            NativeContinuationState::Complete => 4,
+        };
+        self.slot.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ self.generation.rotate_left(9)
+            ^ u64::from(self.resume_point).rotate_left(21)
+            ^ u64::from(self.domain).rotate_left(33)
+            ^ u64::from(self.parent_slot.unwrap_or(u32::MAX)).rotate_left(3)
+            ^ self.mailbox_word
+            ^ self.payload_word.rotate_left(29)
+            ^ self.wake_count.rotate_left(37)
+            ^ self.completed_count.rotate_left(43)
+            ^ state
+    }
+}
+
+fn native_continuation_checksum(continuations: &[NativeContinuation]) -> u64 {
+    let mut checksum = native_scheduler_checksum_seed("native_continuations");
+    for continuation in continuations {
+        native_scheduler_checksum_update(&mut checksum, &[continuation.checksum_word()]);
+    }
+    checksum
+}
+
 fn bench_native_scheduler_runnable_drain(count: u64, iterations: u64) -> Result<Value> {
     let count_usize = usize::try_from(count).context("native runnable count exceeds usize")?;
     let mut scheduler = CoreScheduler::new();
@@ -6739,14 +6903,22 @@ fn bench_native_scheduler_runnable_drain(count: u64, iterations: u64) -> Result<
     let tasklets = (0..count_usize)
         .map(|_| scheduler.create_tasklet())
         .collect::<Vec<_>>();
+    let mut continuations = tasklets
+        .iter()
+        .enumerate()
+        .map(|(slot, tasklet)| NativeContinuation::new(*tasklet, slot, None))
+        .collect::<Vec<_>>();
 
     let mut latency_samples = Vec::with_capacity(iterations as usize);
     let mut latency_samples_ns = Vec::with_capacity(iterations as usize);
     let mut completed = 0_u64;
+    let mut continuation_transitions = 0_u64;
     let started = Instant::now();
-    for _ in 0..iterations {
+    for iteration in 0..iterations {
         let sample_started = Instant::now();
-        for tasklet in &tasklets {
+        for (index, tasklet) in tasklets.iter().enumerate() {
+            continuation_transitions = continuation_transitions
+                .saturating_add(continuations[index].schedule(iteration, index as u64));
             scheduler
                 .schedule_tasklet_back(queue, *tasklet)
                 .context("scheduling native runnable tasklet")?;
@@ -6756,8 +6928,18 @@ fn bench_native_scheduler_runnable_drain(count: u64, iterations: u64) -> Result<
             .pop_next_runnable_tasklet(queue)
             .context("popping native runnable tasklet")?
         {
+            let index = usize::try_from(popped).context("native runnable pop index overflow")?;
+            if tasklets.get(index).copied() != Some(tasklet) {
+                bail!(
+                    "native runnable drain popped unexpected tasklet {tasklet:?} at index {index}"
+                );
+            }
+            continuation_transitions =
+                continuation_transitions.saturating_add(continuations[index].resume(iteration));
+            continuation_transitions =
+                continuation_transitions.saturating_add(continuations[index].complete(iteration));
             popped += 1;
-            black_box(tasklet);
+            black_box(&continuations[index]);
         }
         if popped != count {
             bail!("native runnable drain popped {popped} tasklets, expected {count}");
@@ -6770,7 +6952,7 @@ fn bench_native_scheduler_runnable_drain(count: u64, iterations: u64) -> Result<
     let duration_us = started.elapsed().as_micros() as u64;
     let operation_count = count.saturating_mul(iterations).saturating_mul(2);
 
-    Ok(native_scheduler_row(
+    let mut row = native_scheduler_row(
         "native-runnable-drain",
         count,
         iterations,
@@ -6786,8 +6968,15 @@ fn bench_native_scheduler_runnable_drain(count: u64, iterations: u64) -> Result<
         0,
         latency_samples,
         latency_samples_ns,
-        "Rust-owned run queue schedule+drain with no Python, Greenlet, PyO3, trace interpreter, or refcount work in the hot path.",
-    ))
+        "Rust-owned run queue schedule+drain carrying explicit Rust continuation state machines with no Python, Greenlet, PyO3, trace interpreter, or refcount work in the hot path.",
+    );
+    add_native_scheduler_continuation_metrics(
+        &mut row,
+        continuations.len() as u64,
+        continuation_transitions,
+        native_continuation_checksum(&continuations),
+    );
+    Ok(row)
 }
 
 fn bench_native_scheduler_channel_rendezvous(pair_count: u64, iterations: u64) -> Result<Value> {
@@ -6802,22 +6991,49 @@ fn bench_native_scheduler_channel_rendezvous(pair_count: u64, iterations: u64) -
         senders.push(scheduler.create_tasklet());
         receivers.push(scheduler.create_tasklet());
     }
+    let mut sender_continuations = senders
+        .iter()
+        .enumerate()
+        .map(|(slot, tasklet)| NativeContinuation::new(*tasklet, slot, None))
+        .collect::<Vec<_>>();
+    let mut receiver_continuations = receivers
+        .iter()
+        .enumerate()
+        .map(|(slot, tasklet)| {
+            NativeContinuation::new(*tasklet, slot + pair_count_usize, Some(slot))
+        })
+        .collect::<Vec<_>>();
 
     let mut latency_samples = Vec::with_capacity(iterations as usize);
     let mut latency_samples_ns = Vec::with_capacity(iterations as usize);
     let mut transfers = 0_u64;
+    let mut continuation_transitions = 0_u64;
     let started = Instant::now();
-    for _ in 0..iterations {
+    for iteration in 0..iterations {
         let sample_started = Instant::now();
         for index in 0..pair_count_usize {
+            continuation_transitions = continuation_transitions
+                .saturating_add(receiver_continuations[index].block(iteration, index as u64));
             scheduler
                 .receive(receivers[index], channels[index])
                 .context("blocking native channel receiver")?;
+            continuation_transitions = continuation_transitions
+                .saturating_add(sender_continuations[index].schedule(iteration, index as u64));
             let result = scheduler
                 .send(senders[index], channels[index])
                 .context("matching native channel sender")?;
+            continuation_transitions = continuation_transitions
+                .saturating_add(sender_continuations[index].complete(iteration));
+            continuation_transitions = continuation_transitions
+                .saturating_add(receiver_continuations[index].wake(iteration, index as u64));
+            continuation_transitions = continuation_transitions
+                .saturating_add(receiver_continuations[index].resume(iteration));
             transfers += 1;
-            black_box(result);
+            black_box((
+                result,
+                &sender_continuations[index],
+                &receiver_continuations[index],
+            ));
         }
         let sample_elapsed = sample_started.elapsed();
         latency_samples.push(sample_elapsed.as_micros() as u64);
@@ -6837,7 +7053,15 @@ fn bench_native_scheduler_channel_rendezvous(pair_count: u64, iterations: u64) -
     let duration_us = started.elapsed().as_micros() as u64;
     let operation_count = pair_count.saturating_mul(iterations).saturating_mul(2);
 
-    Ok(native_scheduler_row(
+    let continuation_checksum = {
+        let mut checksum = native_continuation_checksum(&sender_continuations);
+        native_scheduler_checksum_update(
+            &mut checksum,
+            &[native_continuation_checksum(&receiver_continuations)],
+        );
+        checksum
+    };
+    let mut row = native_scheduler_row(
         "native-channel-rendezvous",
         pair_count,
         iterations,
@@ -6854,8 +7078,17 @@ fn bench_native_scheduler_channel_rendezvous(pair_count: u64, iterations: u64) -
         pair_count,
         latency_samples,
         latency_samples_ns,
-        "Rust-owned unbuffered channel receive+send rendezvous with payload-token handoff and no Python payload objects in the hot path.",
-    ))
+        "Rust-owned unbuffered channel receive+send rendezvous carrying sender/receiver continuation state machines, payload-token handoff, and no Python payload objects in the hot path.",
+    );
+    add_native_scheduler_continuation_metrics(
+        &mut row,
+        sender_continuations
+            .len()
+            .saturating_add(receiver_continuations.len()) as u64,
+        continuation_transitions,
+        continuation_checksum,
+    );
+    Ok(row)
 }
 
 fn bench_native_scheduler_domain_wakeups(wakeup_count: u64, iterations: u64) -> Result<Value> {
@@ -6872,15 +7105,25 @@ fn bench_native_scheduler_domain_wakeups(wakeup_count: u64, iterations: u64) -> 
     let tasklets = (0..wakeup_count_usize)
         .map(|_| scheduler.create_tasklet())
         .collect::<Vec<_>>();
+    let mut continuations = tasklets
+        .iter()
+        .enumerate()
+        .map(|(slot, tasklet)| NativeContinuation::new(*tasklet, slot, None))
+        .collect::<Vec<_>>();
 
     let mut latency_samples = Vec::with_capacity(iterations as usize);
     let mut latency_samples_ns = Vec::with_capacity(iterations as usize);
     let mut drained = 0_u64;
+    let mut continuation_transitions = 0_u64;
     let started = Instant::now();
-    for _ in 0..iterations {
+    for iteration in 0..iterations {
         let sample_started = Instant::now();
         for (index, tasklet) in tasklets.iter().enumerate() {
             let queue = queues[index % queues.len()];
+            continuations[index].domain = (index % queues.len()) as u16;
+            continuation_transitions = continuation_transitions.saturating_add(
+                continuations[index].wake(iteration, (index % queues.len()) as u64),
+            );
             scheduler
                 .schedule_tasklet_back(queue, *tasklet)
                 .context("enqueuing native domain wakeup")?;
@@ -6891,8 +7134,16 @@ fn bench_native_scheduler_domain_wakeups(wakeup_count: u64, iterations: u64) -> 
                 .pop_next_runnable_tasklet(*queue)
                 .context("draining native domain queue")?
             {
+                let index = tasklets
+                    .iter()
+                    .position(|candidate| *candidate == tasklet)
+                    .context("native domain popped unknown tasklet")?;
+                continuation_transitions =
+                    continuation_transitions.saturating_add(continuations[index].resume(iteration));
+                continuation_transitions = continuation_transitions
+                    .saturating_add(continuations[index].complete(iteration));
                 popped += 1;
-                black_box(tasklet);
+                black_box(&continuations[index]);
             }
         }
         if popped != wakeup_count {
@@ -6906,7 +7157,7 @@ fn bench_native_scheduler_domain_wakeups(wakeup_count: u64, iterations: u64) -> 
     let duration_us = started.elapsed().as_micros() as u64;
     let operation_count = wakeup_count.saturating_mul(iterations).saturating_mul(2);
 
-    Ok(native_scheduler_row(
+    let mut row = native_scheduler_row(
         "native-domain-wakeups",
         wakeup_count,
         iterations,
@@ -6923,8 +7174,15 @@ fn bench_native_scheduler_domain_wakeups(wakeup_count: u64, iterations: u64) -> 
         domain_count as u64,
         latency_samples,
         latency_samples_ns,
-        "Rust-owned domain-style wakeup enqueue+drain across multiple run queues; this models the target architecture without Python/Greenlet scheduling.",
-    ))
+        "Rust-owned domain-style wakeup enqueue+drain across multiple run queues carrying explicit continuation records; this models the target architecture without Python/Greenlet scheduling.",
+    );
+    add_native_scheduler_continuation_metrics(
+        &mut row,
+        continuations.len() as u64,
+        continuation_transitions,
+        native_continuation_checksum(&continuations),
+    );
+    Ok(row)
 }
 
 fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -> Result<Value> {
@@ -6945,11 +7203,19 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
     let workers = (0..worker_count_usize)
         .map(|_| scheduler.create_tasklet())
         .collect::<Vec<_>>();
+    let mut main_continuation = NativeContinuation::new(main, 0, None);
+    let mut collector_continuation = NativeContinuation::new(collector, 1, None);
+    let mut worker_continuations = workers
+        .iter()
+        .enumerate()
+        .map(|(slot, tasklet)| NativeContinuation::new(*tasklet, slot + 2, Some(0)))
+        .collect::<Vec<_>>();
 
     let mut latency_samples = Vec::with_capacity(iterations as usize);
     let mut latency_samples_ns = Vec::with_capacity(iterations as usize);
     let mut logical_operations = 0_u64;
     let mut scheduler_operations = 0_u64;
+    let mut continuation_transitions = 0_u64;
     let mut messages = 0_u64;
     let mut data_bytes = 0_u64;
     let mut checksum = native_scheduler_checksum_seed("fanout_pipeline");
@@ -6970,7 +7236,13 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
             "collector output receive",
         )?;
         scheduler_operations = scheduler_operations.saturating_add(1);
+        continuation_transitions =
+            continuation_transitions.saturating_add(collector_continuation.block(iteration, 0));
         for (worker, input) in workers.iter().zip(inputs.iter()) {
+            let worker_index = workers
+                .iter()
+                .position(|candidate| candidate == worker)
+                .context("native fanout worker index missing")?;
             expect_native_blocked(
                 scheduler
                     .receive(*worker, *input)
@@ -6978,11 +7250,16 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
                 "worker input receive",
             )?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions = continuation_transitions.saturating_add(
+                worker_continuations[worker_index].block(iteration, worker_index as u64),
+            );
         }
 
         for message_id in 0..messages_per_iteration {
             let worker_index =
                 usize::try_from(message_id % worker_count).expect("worker index fits usize");
+            continuation_transitions = continuation_transitions
+                .saturating_add(main_continuation.schedule(iteration, message_id));
             expect_native_matched(
                 scheduler
                     .send(main, inputs[worker_index])
@@ -6990,6 +7267,8 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
                 "main to worker input send",
             )?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions = continuation_transitions
+                .saturating_add(worker_continuations[worker_index].wake(iteration, message_id));
             scheduler
                 .schedule_tasklet_back(queue, workers[worker_index])
                 .context("scheduling native fanout worker")?;
@@ -7001,6 +7280,8 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
                 "native fanout worker",
             )?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions = continuation_transitions
+                .saturating_add(worker_continuations[worker_index].resume(iteration));
 
             worker_counts[worker_index] = worker_counts[worker_index].saturating_add(1);
             worker_totals[worker_index] = worker_totals[worker_index]
@@ -7015,9 +7296,15 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
                 "worker reblock on input",
             )?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions = continuation_transitions.saturating_add(
+                worker_continuations[worker_index].block(iteration, worker_index as u64),
+            );
         }
 
         for worker_index in 0..worker_count_usize {
+            continuation_transitions = continuation_transitions.saturating_add(
+                main_continuation.schedule(iteration, messages_per_iteration + worker_index as u64),
+            );
             expect_native_matched(
                 scheduler
                     .send(main, inputs[worker_index])
@@ -7025,6 +7312,10 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
                 "main to worker stop send",
             )?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions = continuation_transitions.saturating_add(
+                worker_continuations[worker_index]
+                    .wake(iteration, messages_per_iteration + worker_index as u64),
+            );
             scheduler
                 .schedule_tasklet_back(queue, workers[worker_index])
                 .context("scheduling native fanout worker stop")?;
@@ -7036,6 +7327,8 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
                 "native fanout worker stop",
             )?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions = continuation_transitions
+                .saturating_add(worker_continuations[worker_index].resume(iteration));
 
             expect_native_matched(
                 scheduler
@@ -7044,6 +7337,11 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
                 "worker result to collector send",
             )?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions = continuation_transitions
+                .saturating_add(worker_continuations[worker_index].complete(iteration));
+            continuation_transitions = continuation_transitions.saturating_add(
+                collector_continuation.wake(iteration, worker_totals[worker_index]),
+            );
             scheduler
                 .update_tasklet_runtime_state(
                     workers[worker_index],
@@ -7064,6 +7362,8 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
                 "native fanout collector",
             )?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions =
+                continuation_transitions.saturating_add(collector_continuation.resume(iteration));
             collected = collected.saturating_add(1);
             collected_count_sum = collected_count_sum.saturating_add(worker_counts[worker_index]);
             collected_total_sum = collected_total_sum.wrapping_add(worker_totals[worker_index]);
@@ -7075,12 +7375,16 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
                     "collector reblock on output",
                 )?;
                 scheduler_operations = scheduler_operations.saturating_add(1);
+                continuation_transitions = continuation_transitions
+                    .saturating_add(collector_continuation.block(iteration, worker_index as u64));
             }
         }
 
         scheduler
             .update_tasklet_runtime_state(collector, false, false, iteration.saturating_add(1))
             .context("completing native fanout collector")?;
+        continuation_transitions =
+            continuation_transitions.saturating_add(collector_continuation.complete(iteration));
         if collected != worker_count || collected_count_sum != messages_per_iteration {
             bail!(
                 "native fanout collected {collected}/{worker_count} worker results and {collected_count_sum}/{messages_per_iteration} messages"
@@ -7102,6 +7406,8 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
                 collected,
                 collected_count_sum,
                 collected_total_sum,
+                native_continuation_checksum(&worker_continuations),
+                collector_continuation.checksum_word(),
             ],
         );
         let sample_elapsed = sample_started.elapsed();
@@ -7128,7 +7434,7 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
         worker_count,
         latency_samples,
         latency_samples_ns,
-        "Rust-owned fanout tasklet pipeline: scheduler wakeups, channel handoffs, worker accounting, and result collection all stay in Rust with no Python tasklet body, Greenlet, PyO3 object access, or refcount work in the hot path.",
+        "Rust-owned fanout tasklet pipeline: scheduler wakeups, channel handoffs, worker continuation state, worker accounting, and result collection all stay in Rust with no Python tasklet body, Greenlet, PyO3 object access, or refcount work in the hot path.",
     );
     add_native_scheduler_workload_metrics(
         &mut row,
@@ -7136,6 +7442,20 @@ fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -
         data_bytes,
         scheduler_operations,
         checksum,
+    );
+    let mut continuation_checksum = native_continuation_checksum(&worker_continuations);
+    native_scheduler_checksum_update(
+        &mut continuation_checksum,
+        &[
+            main_continuation.checksum_word(),
+            collector_continuation.checksum_word(),
+        ],
+    );
+    add_native_scheduler_continuation_metrics(
+        &mut row,
+        worker_continuations.len().saturating_add(2) as u64,
+        continuation_transitions,
+        continuation_checksum,
     );
     Ok(row)
 }
@@ -7154,11 +7474,18 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
     let zone_tasklets = (0..zones_usize)
         .map(|_| scheduler.create_tasklet())
         .collect::<Vec<_>>();
+    let mut collector_continuation = NativeContinuation::new(collector, 0, None);
+    let mut zone_continuations = zone_tasklets
+        .iter()
+        .enumerate()
+        .map(|(slot, tasklet)| NativeContinuation::new(*tasklet, slot + 1, Some(0)))
+        .collect::<Vec<_>>();
 
     let mut latency_samples = Vec::with_capacity(ticks as usize);
     let mut latency_samples_ns = Vec::with_capacity(ticks as usize);
     let mut logical_operations = 0_u64;
     let mut scheduler_operations = 0_u64;
+    let mut continuation_transitions = 0_u64;
     let mut messages = 0_u64;
     let mut data_bytes = 0_u64;
     let mut checksum = native_scheduler_checksum_seed("zone_tick_study");
@@ -7178,14 +7505,20 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
             "zone collector output receive",
         )?;
         scheduler_operations = scheduler_operations.saturating_add(1);
+        continuation_transitions =
+            continuation_transitions.saturating_add(collector_continuation.block(tick, 0));
 
         for (zone_index, tasklet) in zone_tasklets.iter().enumerate() {
+            continuation_transitions = continuation_transitions
+                .saturating_add(zone_continuations[zone_index].schedule(tick, zone_index as u64));
             scheduler
                 .schedule_tasklet_back(queue, *tasklet)
                 .context("scheduling native zone tasklet")?;
             scheduler_operations = scheduler_operations.saturating_add(1);
             pop_expected_native_tasklet(&mut scheduler, queue, *tasklet, "native zone tasklet")?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions = continuation_transitions
+                .saturating_add(zone_continuations[zone_index].resume(tick));
 
             let zone_id = zone_index as u64;
             let mut total = 0_u64;
@@ -7205,6 +7538,8 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
                         "zone net message to collector send",
                     )?;
                     scheduler_operations = scheduler_operations.saturating_add(1);
+                    continuation_transitions = continuation_transitions
+                        .saturating_add(collector_continuation.wake(tick, total));
                     scheduler
                         .schedule_tasklet_back(queue, collector)
                         .context("scheduling native zone collector for net message")?;
@@ -7216,6 +7551,8 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
                         "native zone collector net message",
                     )?;
                     scheduler_operations = scheduler_operations.saturating_add(1);
+                    continuation_transitions = continuation_transitions
+                        .saturating_add(collector_continuation.resume(tick));
                     collected = collected.saturating_add(1);
                     net_messages = net_messages.saturating_add(1);
                     collected_value_sum = collected_value_sum.wrapping_add(total & 0xFFFF);
@@ -7226,6 +7563,8 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
                         "zone collector reblock after net message",
                     )?;
                     scheduler_operations = scheduler_operations.saturating_add(1);
+                    continuation_transitions = continuation_transitions
+                        .saturating_add(collector_continuation.block(tick, total & 0xFFFF));
                 }
             }
 
@@ -7236,6 +7575,10 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
                 "zone done message to collector send",
             )?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions = continuation_transitions
+                .saturating_add(zone_continuations[zone_index].complete(tick));
+            continuation_transitions =
+                continuation_transitions.saturating_add(collector_continuation.wake(tick, total));
             scheduler
                 .update_tasklet_runtime_state(*tasklet, false, false, tick.saturating_add(1))
                 .context("completing native zone tasklet")?;
@@ -7250,6 +7593,8 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
                 "native zone collector done message",
             )?;
             scheduler_operations = scheduler_operations.saturating_add(1);
+            continuation_transitions =
+                continuation_transitions.saturating_add(collector_continuation.resume(tick));
             collected = collected.saturating_add(1);
             done = done.saturating_add(1);
             collected_value_sum = collected_value_sum.wrapping_add(total);
@@ -7261,12 +7606,16 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
                     "zone collector reblock after done message",
                 )?;
                 scheduler_operations = scheduler_operations.saturating_add(1);
+                continuation_transitions = continuation_transitions
+                    .saturating_add(collector_continuation.block(tick, total));
             }
         }
 
         scheduler
             .update_tasklet_runtime_state(collector, false, false, tick.saturating_add(1))
             .context("completing native zone collector")?;
+        continuation_transitions =
+            continuation_transitions.saturating_add(collector_continuation.complete(tick));
         if done != zones {
             bail!("native zone tick completed {done}/{zones} zones");
         }
@@ -7285,7 +7634,14 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
         data_bytes = data_bytes.saturating_add(net_messages.saturating_mul(64));
         native_scheduler_checksum_update(
             &mut checksum,
-            &[tick, collected, net_messages, collected_value_sum],
+            &[
+                tick,
+                collected,
+                net_messages,
+                collected_value_sum,
+                native_continuation_checksum(&zone_continuations),
+                collector_continuation.checksum_word(),
+            ],
         );
         let sample_elapsed = sample_started.elapsed();
         latency_samples.push(sample_elapsed.as_micros() as u64);
@@ -7312,7 +7668,7 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
         zones,
         latency_samples,
         latency_samples_ns,
-        "Rust-owned synthetic zone tick: zone tasklets, entity updates, network-like emissions, channel handoffs, and aggregation all execute in Rust with no Python tasklet body, Greenlet, PyO3 object access, or refcount work in the hot path.",
+        "Rust-owned synthetic zone tick: zone tasklets, explicit zone/collector continuation state, entity updates, network-like emissions, channel handoffs, and aggregation all execute in Rust with no Python tasklet body, Greenlet, PyO3 object access, or refcount work in the hot path.",
     );
     add_native_scheduler_workload_metrics(
         &mut row,
@@ -7320,6 +7676,17 @@ fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Valu
         data_bytes,
         scheduler_operations,
         checksum,
+    );
+    let mut continuation_checksum = native_continuation_checksum(&zone_continuations);
+    native_scheduler_checksum_update(
+        &mut continuation_checksum,
+        &[collector_continuation.checksum_word()],
+    );
+    add_native_scheduler_continuation_metrics(
+        &mut row,
+        zone_continuations.len().saturating_add(1) as u64,
+        continuation_transitions,
+        continuation_checksum,
     );
     Ok(row)
 }
@@ -7426,6 +7793,46 @@ fn add_native_scheduler_workload_metrics(
     }
 }
 
+fn add_native_scheduler_continuation_metrics(
+    row: &mut Value,
+    continuation_count: u64,
+    continuation_transition_count: u64,
+    continuation_checksum: u64,
+) {
+    if let Some(object) = row.as_object_mut() {
+        object.insert(
+            String::from("continuation_model"),
+            json!("rust_owned_explicit_state_machine"),
+        );
+        object.insert(
+            String::from("continuation_state_shape"),
+            json!("tasklet_id_slot_state_generation_resume_point_domain_parent_mailbox_payload_wake_and_completion_counters"),
+        );
+        object.insert(
+            String::from("continuation_count"),
+            json!(continuation_count),
+        );
+        object.insert(
+            String::from("continuation_transition_count"),
+            json!(continuation_transition_count),
+        );
+        object.insert(
+            String::from("continuation_state_bytes"),
+            json!(
+                continuation_count.saturating_mul(std::mem::size_of::<NativeContinuation>() as u64)
+            ),
+        );
+        object.insert(
+            String::from("continuation_checksum"),
+            json!(format!("{continuation_checksum:016x}")),
+        );
+        object.insert(
+            String::from("native_equivalence_note"),
+            json!("Native rows carry Rust-owned continuation/process records alongside CoreScheduler tasklet IDs. This is still not Python/Greenlet object fidelity, but it is no longer an ID-only hot loop."),
+        );
+    }
+}
+
 fn native_scheduler_checksum_seed(label: &str) -> u64 {
     let mut checksum = 14_695_981_039_346_656_037_u64;
     for byte in label.as_bytes() {
@@ -7484,7 +7891,7 @@ fn native_scheduler_row(
         "comparability": "rust_native_no_python_architecture_probe_not_legacy_api_comparable",
         "claim_eligibility": "architecture_evidence_only_no_legacy_speedup_claim",
         "claim_scope": claim_scope,
-        "benchmark_read": "Use this row to estimate target Rust scheduler-kernel upside after removing Python/Greenlet/PyO3 from the hot path; keep separate from same-Python-API parity rows.",
+        "benchmark_read": "Use this row to estimate target Rust scheduler-kernel upside after replacing Python/Greenlet/PyO3 hot-path work with Rust-owned continuation/process state; keep separate from same-Python-API parity rows.",
         "iterations_per_process": iterations
     })
 }
@@ -18762,7 +19169,7 @@ fn render_html_report(evidence: &[(&str, Value)]) -> Result<String> {
     <tbody>
       <tr><td>Pure Rust scheduler core</td><td>Separate deterministic scheduler semantics from Python object lifetime.</td><td>Reliability improvement for covered state-machine semantics.</td><td>scheduler-fixtures.json; measured for current fixtures</td></tr>
       <tr><td>PyO3 scheduler bridge as compatibility boundary</td><td>Keep old `_scheduler`, `scheduler`, and `scheduler._C_API` imports working while logic moves behind Rust crates.</td><td>Compatibility-preserving migration path; not the final ownership model.</td><td>rust-scheduler-python.json; partial measured boundary evidence</td></tr>
-      <tr><td>Scheduler core ownership drain</td><td>Move tasklet/channel/scheduler lifecycle decisions out of PyO3 types and behind Rust-owned IDs and handles.</td><td>Clearer final architecture with Python limited to compatibility, callables, exceptions, and GIL/refcount translation.</td><td>rust-scheduler-python.json core_ownership_status; open blocker, with live PyO3 tasklet/channel objects now carrying CoreScheduler handles for mirrored unbuffered channel state, core-owned live run-queue FIFO/count/remove/pop and scheduled-state authority, single blocked-queue membership rejection, core-owned kill/pending-exit state at the handle boundary, explicit core pause/resume for covered bind/remove/insert/switch pause paths, core-ID selected send/receive transfers, core-minted payload handoff tokens, core-owned immediate peer handoff, core-selected queue-front introspection, tasklet lifecycle snapshots, and core-backed public tasklet/channel state getters</td></tr>
+      <tr><td>Scheduler core ownership drain</td><td>Move tasklet/channel/scheduler lifecycle decisions out of PyO3 types and behind Rust-owned IDs and handles.</td><td>Clearer final architecture with Python limited to compatibility, callables, exceptions, and GIL/refcount translation.</td><td>rust-scheduler-python.json core_ownership_status; open blocker, with live PyO3 tasklet/channel objects now carrying CoreScheduler handles for routed unbuffered channel state, no bridge-local Rust channel blocked sender/receiver queue fields, no Channel-owned payload map, core-owned live run-queue FIFO/count/remove/pop, per-run-queue current-tasklet identity, and scheduled-state authority, CoreScheduler-backed main-tasklet and parent-tasklet identity plus parent-cycle rejection, CoreScheduler-backed public scheduler getcurrent/C API current-tasklet authority, CoreScheduler-backed public scheduler run-count/C API run-count authority, CoreScheduler-backed public active/all-time tasklet lifetime counters with no bridge-local counted-active flag, CoreScheduler-backed public active schedule-manager counters, CoreScheduler-backed public active channel counters, CoreScheduler-backed public last-timeout counters, CoreScheduler-backed nested-tasklet mode, CoreScheduler-backed schedule/channel callback registration plus schedule-callback dispatch metadata and tasklet callback-skip state, single blocked-queue membership rejection, no bridge-local Rust tasklet blocked, block-trap, callable-bound, args-bound, counted-active, timing metric, or switch-count fields, core-owned kill/pending-exit and tasklet delivery state at the handle boundary, core-backed C API alive, dead-kill no-op, timeout completion, and paused direct-run decisions, explicit core pause/resume for covered bind/remove/insert/switch pause paths, core-ID selected send/receive transfers, core-minted payload handoff tokens, core-owned immediate peer handoff, core-selected queue-front introspection, tasklet lifecycle, timing, highlighted, context, and callsite metadata snapshots, and core-backed public tasklet/channel state getters</td></tr>
       <tr><td>Sampled local IO evidence lane</td><td>Compare realistic local socket/TLS request loops using latency, throughput, CPU burn, CPU percent, and RSS when legacy Carbon IO is unavailable.</td><td>More credible local resource-consumption data without claiming Carbon IO speedup.</td><td>io-workloads.json; measured baseline-vs-bridge only</td></tr>
       <tr><td>Evidence-gated speedup suppression</td><td>Prevent unsupported feature and speedup claims.</td><td>Reliability improvement for the final report and progress report.</td><td>xtask report-readiness/report; measured gate behavior</td></tr>
       <tr><td>Native release benchmark lane</td><td>Record Rust `release-native`, LTO, debug assertion state, and `target-cpu=native` context.</td><td>Required context for any future optimized Rust performance claim.</td><td>bench-tier-local.json and io-workloads.json; measured current native Rust context</td></tr>
@@ -19337,7 +19744,7 @@ fn render_progress_report(evidence: &[(&str, Option<Value>)]) -> Result<String> 
     <div class="hero-inner">
       <h1>Carbon Rust Migration Progress Report</h1>
       <p class="hero-meta">Interactive local evidence dashboard for scheduler, IO, and resources parity work. Use the controls to inspect throughput, latency, CPU burn, RSS, and 100k linear scale estimates by feature.</p>
-      <div class="notice">This is a progress report, not the final parity/performance report. Final HTML remains blocked until every required evidence gate is present, passing, and report-ready.</div>
+      <div class="notice">This is a client-review progress report, not the final parity/performance report. Incomplete gates are shown as TODOs below; final claims remain blocked until every required evidence gate is present, passing, and report-ready.</div>
     </div>
   </header>
   <main>
@@ -19365,9 +19772,9 @@ fn render_progress_report(evidence: &[(&str, Option<Value>)]) -> Result<String> 
     <tbody>{gate_rows}</tbody>
   </table>
 
-  <h2>Report Blocker Details</h2>
+  <h2>Open TODOs / Final-Report Gates</h2>
   <table>
-    <thead><tr><th>Gate</th><th>Blocker Class</th><th>Readiness Blocker Codes</th><th>Remaining Work Before Final Report</th></tr></thead>
+    <thead><tr><th>Gate</th><th>TODO Class</th><th>Readiness Codes</th><th>Remaining Work Before Final Report</th></tr></thead>
     <tbody>{gate_blocker_rows}</tbody>
   </table>
 
@@ -19466,7 +19873,7 @@ fn render_progress_report(evidence: &[(&str, Option<Value>)]) -> Result<String> 
     <tbody>
       <tr><td>Pure Rust scheduler core</td><td>Separates deterministic scheduler semantics from Python and Greenlet object lifetime.</td><td>scheduler-fixtures.json</td><td>measured for current fixtures</td></tr>
       <tr><td>PyO3 scheduler bridge as compatibility boundary</td><td>Runs unchanged legacy Python and C API tests while the owned scheduler state keeps moving into Rust crates.</td><td>rust-scheduler-python.json and docs/functionality-matrix.md</td><td>partial boundary evidence; not the final core ownership model</td></tr>
-      <tr><td>Scheduler CoreScheduler handle API</td><td>Introduces Rust-owned CoreTaskletId/CoreChannelId/CoreRunQueueId/CorePayloadToken state for unbuffered channel rendezvous, scheduler run-queue FIFO/count/remove/pop behavior, scheduled-state authority, explicit pause/resume lifecycle transitions, balance signs, blocked sender/receiver queues, single blocked-queue membership, preference clamping, close/open/clear, block-trap no-mutation checks, operation-result selected send/receive transfers, core-owned immediate peer handoff, core-selected queue-front introspection, tasklet runtime snapshots, core-owned kill/pending-exit state, and payload handoff identity.</td><td>carbon-scheduler-core tests and rust-scheduler-python.json core_ownership_status</td><td>measured core target now wired into the PyO3 bridge for live handle allocation, core-owned bridge run queues and scheduled-state authority, explicit core pause/resume for covered bind/remove/insert/switch pause paths, mirrored unbuffered channel balance/queue transitions, core-ID selected matched sender/receiver transfer plus immediate peer handoff, core-selected channel.queue results in covered paths, core-owned blocked-membership invariant, core-owned kill/pending-exit state at the handle boundary, core-owned payload tokens for send/receive, exception replay, and blocked-sender cleanup, core-backed public tasklet and channel state getters, and C API times-switched getter authority; Python payload object storage and Greenlet delivery remain bridge-owned</td></tr>
+      <tr><td>Scheduler CoreScheduler handle API</td><td>Introduces Rust-owned CoreTaskletId/CoreChannelId/CoreRunQueueId/CorePayloadToken state for unbuffered channel rendezvous, scheduler run-queue FIFO/count/remove/pop behavior, per-run-queue current-tasklet identity, scheduled-state authority, main-tasklet and parent-tasklet identity authority, parent-cycle rejection, public scheduler run-count authority, public tasklet lifetime counter authority, public schedule-manager lifetime counter authority, public channel lifetime counter authority, public last-timeout counter authority, public nested-tasklet mode authority, public schedule callback dispatch metadata authority, public schedule and per-run-queue channel callback registration authority, tasklet callback-skip authority, tasklet continuation/kill delivery-state authority, tasklet block-trap authority, tasklet dont_raise authority, tasklet highlighted authority, tasklet context authority, tasklet callsite metadata authority, tasklet timing metric authority, explicit pause/resume lifecycle transitions, balance signs, blocked sender/receiver queues, single blocked-queue membership, preference clamping, close/open/clear, block-trap no-mutation checks, operation-result selected send/receive transfers, core-owned immediate peer handoff, core-selected queue-front introspection, tasklet runtime snapshots, core-owned kill/pending-exit state, and payload handoff identity.</td><td>carbon-scheduler-core tests and rust-scheduler-python.json core_ownership_status</td><td>measured core target now wired into the PyO3 bridge for live handle allocation, core-owned bridge run queues, per-run-queue current-tasklet identity for public getcurrent/is_current and C API PyScheduler_GetCurrent, scheduled-state authority, public Python/C API main-tasklet identity authority, Python tasklet parent-identity getter authority plus Rust parent-cycle rejection, public Python/C API run-count authority, public Python/C API active/all-time tasklet lifetime counter authority with no bridge-local counted-active flag, public Python/C API active schedule-manager counter authority, and public Python/C API active channel counter authority, public C API last-timeout counter authority, public Python nested-tasklet mode authority, public schedule callback dispatch metadata, public schedule and per-run-queue channel callback registration plus tasklet callback-skip authority, tasklet continuation/kill delivery-state authority, tasklet block-trap authority, tasklet dont_raise authority, tasklet highlighted authority, tasklet context authority, tasklet callsite metadata authority, tasklet timing metric authority, no bridge-local Rust tasklet blocked, block-trap, callable-bound, args-bound, counted-active, timing metric, or switch-count fields, core-backed C API alive, dead-kill no-op, timeout completion, and paused direct-run decisions, explicit core pause/resume for covered bind/remove/insert/switch pause paths, routed unbuffered channel balance/queue transitions with no bridge-local Rust channel blocked sender/receiver queue fields, core-ID selected matched sender/receiver transfer plus immediate peer handoff, core-selected channel.queue results in covered paths, core-owned blocked-membership invariant, core-owned kill/pending-exit state at the handle boundary, core-owned payload tokens for send/receive, exception replay, and blocked-sender cleanup with Python payload/exception objects isolated in a CorePayloadToken-keyed bridge registry outside Channel objects, core-backed public tasklet and channel state getters, with channel balance/preference/closing/closed having no bridge-local Rust fields, and C API PyTasklet_IsMain/PyTasklet_Alive/times-switched/block-trap/context getter authority; Python payload registry contents, blocked-tasklet lifetime refs, callback callable/function-pointer storage/actual invocation, Python context-manager/exception-handler callable objects, and Greenlet delivery remain bridge-owned</td></tr>
       <tr><td>Scheduler core ownership drain</td><td>Moves tasklet/channel/scheduler lifecycle decisions out of PyO3 types and behind Rust-owned IDs and handles.</td><td>rust-scheduler-python.json core_ownership_status and reviews/tasks.md</td><td>open blocker; Python bridge is compatibility, not destination architecture</td></tr>
       <tr><td>Evidence-gated report generation</td><td>Prevents unsupported feature and speedup claims.</td><td>xtask report blocks on non-report-ready evidence</td><td>measured</td></tr>
       <tr><td>Rust resources model/tools/catalog-corpus/filter/create-group/create-from-filter/merge/diff/remove/malformed-imports/local-and-remote-CDN-bundle-byte/remote-cache-stats/create-bundle-failure-cleanup/missing-chunk-and-source-type-failure-cleanup/patch-manifest-payload-generation/local-apply/create-patch-failure-cleanup/CLI-artifact slice</td><td>Moves checksum, compression with legacy gzip header normalization, rolling checksum, ResourceTools stream checks for FileDataStreamIn chunked reads, FileDataStreamOut byte output, CompressedFileDataStreamOut gzip roundtrip, MD5 stream checksums, chunked gzip stream decompression, FindMatchingChunks string cases, FindMatchingChunk file offset cases, CountMatchingChunks patch fixture offsets, generated/persisted ChunkIndex lookup, and checksum-filtered ChunkIndex lookup, catalog parsing/export including the large Indicies normal and binary-operation v0 CSV to v0.1 YAML corpus plus YAML round-trips, malformed import result mapping, legacy filter matching with generated wildcard/ellipsis path and include/exclude section-property matrix coverage, CreateFromFilter fixture output, directory ResourceGroup creation, catalog merge, catalog diff, resource removal, BundleGroup local create/unpack byte checks, remote-CDN compressed BundleGroup create/unpack byte checks, process-level local create-and-unpack bundle roundtrip checks, create-bundle zero-chunk and missing-resource-source failure cleanup, 42-chunk local unpack boundary evidence, missing-chunk unpack failure cleanup, remote-requested-local chunk failure cleanup, local-requested-remote compressed chunk failure cleanup, local remote-CDN mirror/cache hit and bad-cache replacement checks, process-level remote-CDN first-run download and second-run cache-hit stats, BundleGroup/PatchGroup manifest parsing/export, PatchGroup local CDN payload read/generation/local apply byte checks including old-layout apply preserving legacy no-removal semantics, low-level BSDIFF corruption rejection, create-patch zero-chunk and missing previous/next resource-source failure cleanup, apply-patch missing previous/next resource input and missing/corrupt payload failure cleanup, malformed local apply manifest rejection for zero apply chunk size, target offset overflow, source range overflow, and overlapping copy ranges, copy-only patch records without generated binary payloads, and 70 process-level Rust resources CLI parity cases including top-level legacy help-shape output, operation-specific help/usage-shape output, dispatcher exit-code/status classes, local and remote-CDN create-bundle, local create-and-unpack bundle, create-bundle failure cleanup, local and remote-CDN unpack-bundle, missing-chunk and source-type mismatch unpack failure cleanup, normal, no-change, chunked, old-layout, copy-only, zero-chunk, missing-source create-patch, and missing-previous/missing-next/missing-payload/corrupt-payload apply-patch behavior into measured Rust evidence.</td><td>rust-resources.json</td><td>measured for current slice</td></tr>
@@ -19480,7 +19887,7 @@ fn render_progress_report(evidence: &[(&str, Option<Value>)]) -> Result<String> 
   <h2>Raw Optimization Notes</h2>
   <pre>{optimization}</pre>
 
-  <h2>Remaining Blockers</h2>
+  <h2>Open TODOs And Non-Claims</h2>
   <ul>{blocker_items}</ul>
 
   <h2>Readiness Notes</h2>
@@ -20594,8 +21001,8 @@ fn render_optimization_tables(evidence: &[(&str, Option<Value>)]) -> String {
         ),
         optimization_table_row(
             "Scheduler core ownership drain",
-            "PyO3 bridge is present for compatibility; core fixtures and live PyO3 tasklet/channel objects now carry CoreScheduler handles for mirrored unbuffered channel state, explicit core pause/resume in covered bind/remove/insert/switch pause paths, core-ID selected send/receive transfers, core-minted payload handoff tokens, blocked throw cleanup from core blocked_on snapshots, core-owned immediate peer handoff, core-owned blocked-membership invariant, core-selected queue-front introspection in covered paths, tasklet runtime snapshots, public tasklet/channel state getters, and C API times-switched getter authority, but Python payload object storage and Greenlet behavior remain bridge-owned.",
-            "Make CoreScheduler tasklet/channel snapshots authoritative for remaining lifecycle decisions and queue identity adapters while keeping PyO3 as a wrapper for Python callables, exceptions, and payload objects.",
+            "PyO3 bridge is present for compatibility; core fixtures and live PyO3 tasklet/channel objects now carry CoreScheduler handles for routed unbuffered channel state with no bridge-local Rust channel blocked sender/receiver queue fields, no Channel-owned payload map, explicit core pause/resume in covered bind/remove/insert/switch pause paths, core-ID selected send/receive transfers, core-minted payload handoff tokens with Python payload/exception objects stored in a CorePayloadToken-keyed bridge registry outside Channel objects, blocked throw cleanup from core blocked_on snapshots, core-owned immediate peer handoff, core-owned blocked-membership invariant, core-selected queue-front introspection in covered paths, per-run-queue current-tasklet identity, tasklet main-identity, parent-identity, runtime, timing, block-trap, dont_raise, highlighted, context, callsite metadata, delivery-state, and channel-callback skip snapshots, public Python/C API scheduler getcurrent and run-count authority, public Python/C API tasklet lifetime counter authority with no bridge-local counted-active flag, public Python/C API active schedule-manager counter authority, public Python/C API active channel counter authority, public C API last-timeout counter authority, public Python nested-tasklet mode authority, public schedule callback dispatch metadata and per-run-queue channel callback registration authority, public tasklet/channel state getters, no bridge-local Rust tasklet blocked, block-trap, callable-bound, args-bound, counted-active, timing metric, or switch-count fields, C API PyTasklet_IsMain/PyTasklet_Alive/times-switched/block-trap/context getter authority, and core-backed blocked state, dead-kill no-op, timeout completion, and paused direct-run decisions, but Python payload registry contents, blocked-tasklet lifetime refs, callback callable/function-pointer storage/actual invocation, Python context-manager/exception-handler callable objects, and Greenlet behavior remain bridge-owned.",
+            "Make CoreScheduler tasklet/channel snapshots authoritative for remaining lifecycle decisions and PyObject identity adapters while keeping PyO3 as a wrapper for Python callables, exceptions, and payload objects.",
             "partial architecture work",
         ),
     ]
@@ -22256,6 +22663,22 @@ mod tests {
             row.get("comparability").and_then(Value::as_str),
             Some("rust_native_no_python_architecture_probe_not_legacy_api_comparable")
         );
+        assert_eq!(
+            row.get("continuation_model").and_then(Value::as_str),
+            Some("rust_owned_explicit_state_machine")
+        );
+        assert_eq!(
+            row.get("continuation_count").and_then(Value::as_u64),
+            Some(8)
+        );
+        assert!(row
+            .get("continuation_transition_count")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > 0));
+        assert!(row
+            .get("continuation_checksum")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()));
         assert!(
             number_at(&row, &["throughput_operations_per_sec"]).is_some_and(|value| value > 0.0)
         );
@@ -22319,6 +22742,16 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            comparison
+                .get("native_continuation_model")
+                .and_then(Value::as_str),
+            Some("rust_owned_explicit_state_machine")
+        );
+        assert!(comparison
+            .get("native_continuation_transition_count")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > 0));
         assert!(comparison
             .get("native_over_bridge_comparable_throughput_ratio")
             .and_then(json_number)
@@ -22395,6 +22828,14 @@ mod tests {
             fanout.get("no_python_hot_path").and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            fanout.get("continuation_model").and_then(Value::as_str),
+            Some("rust_owned_explicit_state_machine")
+        );
+        assert!(fanout
+            .get("continuation_transition_count")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > 0));
         assert_eq!(
             fanout.get("message_count").and_then(Value::as_u64),
             Some(512)
@@ -23036,9 +23477,9 @@ OK (skipped=7)
                         "migration_blocker": "move lifecycle state behind Rust handles",
                         "already_rust_owned": [
                             "semantic fixture runner uses Rust-owned IDs",
-                            "CoreScheduler tasklet snapshots mirror alive/scheduled/paused/times_switched_to"
+                            "CoreScheduler tasklet snapshots mirror main identity, callable-bound state without a bridge-local Rust callable-bound flag, bound-argument state without a bridge-local Rust args-bound flag, block-trap state without a bridge-local Rust block-trap flag, dont_raise state, highlighted state, context state, method/module/file/line/parent-callsite metadata, timing metrics without bridge-local Rust timing fields, alive/scheduled/paused, times_switched_to without a bridge-local Rust switch-count field, blocked state without a bridge-local Rust blocked boolean, and lifetime retirement without a bridge-local counted-active flag"
                         ],
-                        "still_bridge_owned": ["Python tasklet object still stores callable/args/kwargs and Greenlet continuation state"]
+                        "still_bridge_owned": ["Python tasklet object still stores actual callable/args/kwargs and Greenlet continuation state"]
                     }
                 })),
             ),
@@ -23192,7 +23633,7 @@ OK (skipped=7)
         assert!(html.contains("Boundary Status"));
         assert!(html.contains("semantic fixture runner uses Rust-owned IDs"));
         assert!(html.contains("CoreScheduler tasklet snapshots"));
-        assert!(html.contains("Python tasklet object still stores callable/args/kwargs"));
+        assert!(html.contains("Python tasklet object still stores actual callable/args/kwargs"));
         assert!(html.contains("PyO3 remains a compatibility adapter"));
         assert!(html.contains("PyO3 scheduler bridge as compatibility boundary"));
         assert!(html.contains("Scheduler CoreScheduler handle API"));
