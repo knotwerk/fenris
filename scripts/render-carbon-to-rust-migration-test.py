@@ -3480,6 +3480,25 @@ def render(evidence_dir: Path) -> str:
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       line-height: 1.48;
     }
+    .draft-banner {
+      background: #8a1111;
+      color: #ffffff;
+      border-bottom: 4px solid #ffb4b4;
+      padding: 14px 24px;
+      font-weight: 700;
+    }
+    .draft-banner strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 1rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .draft-banner span {
+      display: block;
+      max-width: 1180px;
+      line-height: 1.42;
+    }
     header {
       background: var(--paper);
       border-bottom: 1px solid var(--line);
@@ -3991,6 +4010,10 @@ def render(evidence_dir: Path) -> str:
   </style>
 </head>
 <body>
+  <div class="draft-banner">
+    <strong>DRAFT - AI Exercise Only</strong>
+    <span>This report was produced as an AI-assisted exercise. No real game environment was available, no existing production benchmark suite was available, and the tests are synthetic/fabricated harnesses for exploration. The port and benchmark interpretation have not been reviewed by a human engineer, and the results may contain mistakes or hallucinated assumptions. Treat every claim with very healthy scepticism until it is independently reviewed and rerun against real workloads.</span>
+  </div>
   <header>
     <div class="hero">
       <p class="eyebrow">Carbon to Rust migration test</p>

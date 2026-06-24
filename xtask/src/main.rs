@@ -19667,6 +19667,9 @@ fn render_progress_report(evidence: &[(&str, Option<Value>)]) -> Result<String> 
     h1, h2 {{ color: #102a43; letter-spacing: 0; }}
     h1 {{ margin: 0 0 8px; }}
     h2 {{ margin-top: 30px; }}
+    .draft-banner {{ background: #8a1111; color: #ffffff; border-bottom: 4px solid #ffb4b4; padding: 14px 28px; font-weight: 700; }}
+    .draft-banner strong {{ display: block; margin-bottom: 4px; font-size: 1rem; letter-spacing: 0.04em; text-transform: uppercase; }}
+    .draft-banner span {{ display: block; max-width: 1480px; margin: 0 auto; line-height: 1.42; }}
     .hero-band {{ background: #ffffff; border-bottom: 1px solid var(--line); }}
     .hero-inner {{ max-width: 1480px; margin: 0 auto; padding: 28px; }}
     .hero-meta {{ color: var(--muted); max-width: 960px; }}
@@ -19740,6 +19743,10 @@ fn render_progress_report(evidence: &[(&str, Option<Value>)]) -> Result<String> 
   </style>
 </head>
 <body>
+  <div class="draft-banner">
+    <strong>DRAFT - AI Exercise Only</strong>
+    <span>This report was produced as an AI-assisted exercise. No real game environment was available, no existing production benchmark suite was available, and the tests are synthetic/fabricated harnesses for exploration. The port and benchmark interpretation have not been reviewed by a human engineer, and the results may contain mistakes or hallucinated assumptions. Treat every claim with very healthy scepticism until it is independently reviewed and rerun against real workloads.</span>
+  </div>
   <header class="hero-band">
     <div class="hero-inner">
       <h1>Carbon Rust Migration Progress Report</h1>
