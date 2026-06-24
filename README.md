@@ -1,62 +1,121 @@
 # Fenris
 
-Fenris is the Carbon Rust rewrite evidence workbench. It owns the integration
-harness, report generation, benchmark orchestration, review notes, and pinned
-legacy CarbonEngine checkouts. Rust implementation code lives in standalone
-component repos and is consumed by Fenris through path dependencies.
+Fenris is the integration and evidence workbench for the CarbonEngine-to-Rust
+migration. It keeps the cross-repo harness, benchmark orchestration, report
+generation, review notes, and pinned legacy CarbonEngine baselines in one place.
 
-See [docs/repo-organization.md](docs/repo-organization.md) for the repo boundary
-and CarbonEngine fork policy.
+Implementation code lives in standalone component repositories and is consumed
+here as submodules. Fenris should therefore be treated as the client-facing
+project dashboard and reproducibility workspace, not as the source repository
+for every migrated component.
 
-## Rust Migration Repos
+## Current Status
 
-| Path | Role |
-| --- | --- |
-| `carbon-scheduler-rs` | Rust scheduler implementation, trace fixtures, FFI shell, PyO3 compatibility bridge |
-| `carbon-resources-rs` | Rust resources implementation, compatibility adapters, native catalog experiments |
+- `carbon-scheduler-rs` contains the Rust scheduler core, trace fixtures, C ABI
+  shell, and PyO3 compatibility bridge.
+- `carbon-resources-rs` contains the Rust resources model, compatibility
+  adapters, bundle/patch helpers, and native catalog format experiments.
+- Patched CarbonEngine baselines for `core`, `resources`, and `scheduler` are
+  pinned to private Knotwerk mirrors so the recorded submodule SHAs are
+  fetchable by invited reviewers.
+- `carbonengine/io` remains an upstream submodule for dependency and trace
+  classification; it has not been forked into Knotwerk.
+- Generated evidence and HTML reports are written under `target/carbon/` and
+  are not tracked in git.
 
-## Submodules
+The repository is suitable for invited client review once the reviewer has
+access to the private Knotwerk submodules. Making everything public is a
+separate release decision because some submodules are still private mirrors.
 
-| Path | Repository |
-| --- | --- |
-| `carbonengine/core` | `https://github.com/carbonengine/core.git` |
-| `carbonengine/io` | `https://github.com/carbonengine/io.git` |
-| `carbonengine/resources` | `https://github.com/carbonengine/resources.git` |
-| `carbonengine/scheduler` | `https://github.com/carbonengine/scheduler.git` |
-| `carbonengine/vcpkg-registry` | `https://github.com/carbonengine/vcpkg-registry.git` |
-| `carbon-scheduler-rs` | `https://github.com/knotwerk/carbon-scheduler-rs.git` |
-| `carbon-resources-rs` | `https://github.com/knotwerk/carbon-resources-rs.git` |
+## Repository Map
 
-Initialize after cloning with:
+| Path | Repository | Role |
+| --- | --- | --- |
+| `carbon-scheduler-rs` | `https://github.com/knotwerk/carbon-scheduler-rs.git` | Rust scheduler migration repo. |
+| `carbon-resources-rs` | `https://github.com/knotwerk/carbon-resources-rs.git` | Rust resources migration repo. |
+| `carbonengine/core` | `https://github.com/knotwerk/carbonengine-core.git` | CarbonEngine core mirror with Linux host-enablement patches. |
+| `carbonengine/resources` | `https://github.com/knotwerk/carbonengine-resources.git` | CarbonEngine resources mirror with test and host-enablement patches. |
+| `carbonengine/scheduler` | `https://github.com/knotwerk/carbonengine-scheduler.git` | CarbonEngine scheduler mirror with migration host patches. |
+| `carbonengine/io` | `https://github.com/carbonengine/io.git` | Upstream CarbonEngine IO dependency and trace classification source. |
+| `carbonengine/vcpkg-registry` | `https://github.com/carbonengine/vcpkg-registry.git` | Upstream CarbonEngine vcpkg registry. |
+
+See [docs/repo-organization.md](docs/repo-organization.md) for the ownership
+boundaries and CarbonEngine mirror policy.
+
+## Clone
+
+```sh
+git clone --recurse-submodules https://github.com/knotwerk/fenris.git
+cd fenris
+```
+
+For an existing checkout:
 
 ```sh
 git submodule update --init --recursive
 ```
 
-`carbon-resources-rs` is private under the Knotwerk organization for now. The
-public/private decision for Fenris and its submodules can be made later as a
-separate release step.
+If a submodule cannot be fetched, confirm that the GitHub account has access to
+the relevant private Knotwerk repository.
 
-## Evidence Commands
+## First Checks
 
-Generate the comparative report from existing evidence:
+These commands validate the workspace shape without rebuilding every legacy
+dependency:
 
 ```sh
+cargo metadata --no-deps
+cargo metadata --manifest-path carbon-scheduler-rs/Cargo.toml --no-deps
+cargo metadata --manifest-path carbon-resources-rs/Cargo.toml --no-deps
+cargo run -p xtask -- scheduler-fixtures
+cargo run -p xtask -- rust-resources
+```
+
+The scheduler fixture gate currently reports `60/60` semantic fixtures passing.
+
+## Evidence And Reports
+
+Fenris writes machine-readable evidence to `target/carbon/evidence/` and HTML
+reports to `target/carbon/report/`.
+
+Useful entry points:
+
+```sh
+cargo run -p xtask -- scheduler-fixtures
+cargo run -p xtask -- rust-resources
+cargo run -p xtask -- bench
 python3 scripts/render-carbon-to-rust-migration-test.py
 ```
 
-Run the native resource comparison after building optimized legacy resources
-binaries:
+The main generated report is:
 
-```sh
-RUSTFLAGS="-C target-cpu=native" cargo run -p xtask --profile release-native -- bench
+```text
+target/carbon/report/carbon-to-rust-migration-test.html
 ```
 
-The shareable HTML report is written to `target/carbon/report/carbon-to-rust-migration-test.html`.
-The companion reporting/TODO guide is written to `target/carbon/report/carbon-to-rust-reporting-guide.html`.
+The companion reporting guide is:
+
+```text
+target/carbon/report/carbon-to-rust-reporting-guide.html
+```
+
+Report claims are gated by the evidence JSON. Do not hand-edit broad speedup or
+readiness claims into generated reports.
+
+## Documentation
+
+- [docs/README.md](docs/README.md) is the documentation index.
+- [docs/functionality-matrix.md](docs/functionality-matrix.md) tracks parity
+  and functionality coverage.
+- [reviews/](reviews/) contains review maps, task queues, and source-pair
+  analysis used to drive the migration.
+- [docs/archive/](docs/archive/) contains kickoff plans and dated baseline
+  notes. Archived plans are historical context, not the current project state.
 
 ## Licensing
 
-Fenris and the new Rust migration repos use the MIT License. The Knotwerk GitHub
-organization is operated by ReLU ehf; new Rust migration copyright notices use
-`ReLU ehf` while upstream-derived CarbonEngine behavior retains CCP attribution.
+Fenris is MIT licensed. Submodules keep their own licenses and notices; the root
+license does not override submodule licensing.
+
+Read [LICENSES.md](LICENSES.md) before sharing source archives, generated
+evidence bundles, or public mirrors.

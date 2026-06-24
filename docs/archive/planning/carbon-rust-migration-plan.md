@@ -110,8 +110,8 @@ Responsibilities:
 
 Deliverables:
 
-- `carbonengine-baseline.md`
-- `test-harness-status.md`
+- `docs/archive/baseline/carbonengine-baseline.md`
+- `docs/archive/baseline/test-harness-status.md`
 - Shell command transcript summaries with blockers and next actions
 
 ### Agent B: Resources Migration Research
@@ -215,7 +215,7 @@ Dashboard workloads:
 
 Deliverables:
 
-- `performance-dashboard-plan.md`
+- `docs/archive/planning/performance-dashboard-plan.md`
 - benchmark JSON schema
 - first static dashboard mock using fixture JSON
 

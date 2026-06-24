@@ -69,7 +69,7 @@ broader resources/report gates remain partial.
 ## Claims Not Allowed Yet
 
 - No broad Rust speedup or throughput gain can be claimed.
-- No scheduler parity claim can be made beyond the 58 passing semantic fixtures, matched lab comparison rows, and partial Rust Python bridge subset.
+- No scheduler parity claim can be made beyond the 60 passing semantic fixtures, matched lab comparison rows, and partial Rust Python bridge subset.
 - No claim can be made that the Rust crates fully own scheduler
   tasklet/channel lifecycle yet; `carbon-scheduler-core` has Rust-owned channel
   handles, run queues, tasklet runtime snapshots, public tasklet/channel state
