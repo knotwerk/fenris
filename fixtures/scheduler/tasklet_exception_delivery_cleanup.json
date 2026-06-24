@@ -1,0 +1,227 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "tasklet_exception_delivery_cleanup",
+  "source": {
+    "repo": "carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_tasklet.py::TestTaskletExitException::test_tasklet_raising_standard_exception",
+      "tests/python/scheduler/tests/test_tasklet.py::TestTasklets::test_raise_exception",
+      "tests/python/scheduler/tests/test_tasklet.py::TestTaskletThrowBase::test_throw_noargs",
+      "tests/python/scheduler/tests/test_tasklet.py::TestTaskletThrowImmediate::test_raise_exception",
+      "tests/python/scheduler/tests/test_tasklet.py::TestTaskletThrowImmediate::test_throw_exception"
+    ],
+    "legacy_behavior": [
+      "An unhandled exception raised by tasklet code removes the tasklet from the run queue and leaves the scheduler with only main runnable.",
+      "An exception injected into a blocked tasklet removes it from the blocked queue; if the tasklet catches it, execution continues, otherwise the tasklet exits with the exception recorded."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "channels": [
+      {
+        "id": "caught_channel"
+      },
+      {
+        "id": "unhandled_channel"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "self_raises",
+        "body": [
+          {
+            "op": "raise_exception",
+            "exception": "TypeError"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "self_raises_should_not_run"
+          }
+        ]
+      },
+      {
+        "id": "blocked_catches",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "caught_channel"
+          },
+          {
+            "op": "catch_exception",
+            "exception": "IndexError",
+            "target": "caught_exceptions"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "blocked_catches"
+          }
+        ]
+      },
+      {
+        "id": "blocked_unhandled",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "unhandled_channel"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "blocked_unhandled_should_not_run"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "raise_exception",
+          "tasklet": "blocked_catches",
+          "exception": "IndexError"
+        },
+        {
+          "op": "raise_exception",
+          "tasklet": "blocked_unhandled",
+          "exception": "RuntimeError"
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      {
+        "kind": "tasklet.raise_exception",
+        "actor": "self_raises",
+        "tasklet": "self_raises",
+        "exception": "TypeError",
+        "source": "tasklet"
+      },
+      {
+        "kind": "tasklet.exception",
+        "tasklet": "self_raises",
+        "exception": {
+          "type": "TypeError"
+        }
+      },
+      {
+        "kind": "channel.block",
+        "channel": "caught_channel",
+        "actor": "blocked_catches",
+        "direction": "receive",
+        "balance": -1
+      },
+      {
+        "kind": "channel.block",
+        "channel": "unhandled_channel",
+        "actor": "blocked_unhandled",
+        "direction": "receive",
+        "balance": -1
+      },
+      {
+        "kind": "tasklet.raise_exception",
+        "actor": "main",
+        "tasklet": "blocked_catches",
+        "exception": "IndexError"
+      },
+      {
+        "kind": "tasklet.raise_exception",
+        "actor": "main",
+        "tasklet": "blocked_unhandled",
+        "exception": "RuntimeError"
+      },
+      {
+        "kind": "tasklet.exception.caught",
+        "tasklet": "blocked_catches",
+        "caught": {
+          "type": "IndexError"
+        }
+      },
+      {
+        "kind": "tasklet.observed",
+        "actor": "blocked_catches",
+        "target": "completed",
+        "value": "blocked_catches"
+      },
+      {
+        "kind": "tasklet.exception",
+        "tasklet": "blocked_unhandled",
+        "exception": {
+          "type": "RuntimeError"
+        }
+      }
+    ],
+    "match_counts": [
+      {
+        "event": {
+          "kind": "tasklet.exception"
+        },
+        "count": 2
+      },
+      {
+        "event": {
+          "kind": "tasklet.exception.caught"
+        },
+        "count": 1
+      }
+    ]
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": [
+      "blocked_catches"
+    ],
+    "caught_exceptions": [
+      {
+        "type": "IndexError"
+      }
+    ],
+    "tasklets": {
+      "self_raises": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "raised": {
+          "type": "TypeError"
+        }
+      },
+      "blocked_catches": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false
+      },
+      "blocked_unhandled": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "raised": {
+          "type": "RuntimeError"
+        }
+      }
+    },
+    "channels": {
+      "caught_channel": {
+        "balance": 0,
+        "blocked_receivers": [],
+        "blocked_senders": []
+      },
+      "unhandled_channel": {
+        "balance": 0,
+        "blocked_receivers": [],
+        "blocked_senders": []
+      }
+    },
+    "blocked_tasklet_count": 0,
+    "blocked_channel_count": 0,
+    "active_tasklet_count": 1
+  }
+}

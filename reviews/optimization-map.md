@@ -46,6 +46,12 @@ The scheduler measurement map lives in the Knotwerk scheduler port:
 
 `carbon-scheduler-rs/docs/distributed-orchestration-metrics.md`
 
+The legacy C++ scheduler should be treated as an optimized baseline and
+calibration point, not as a fast path to clone mechanically. The compatibility
+bridge must report where it is below legacy, while the bigger Rust opportunity
+belongs to the architecture track where more tasklet work can run without Python
+in the hot path. See `reviews/scheduler-cpp-baseline-note.md`.
+
 ## Scheduler Metrics To Add
 
 | Area | Metrics |

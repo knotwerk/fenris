@@ -14,6 +14,7 @@ open proof obligations.
 | [coverage-map.md](coverage-map.md) | Feature and fixture coverage map. |
 | [optimization-map.md](optimization-map.md) | Optimization opportunities and evidence requirements. |
 | [performance-map.md](performance-map.md) | Benchmark evidence and allowed performance claims. |
+| [scheduler-cpp-baseline-note.md](scheduler-cpp-baseline-note.md) | Positioning note for the optimized legacy C++ scheduler baseline. |
 | [queue.md](queue.md) | Ordered pair-review queue. |
 | [findings.jsonl](findings.jsonl) | Machine-readable consolidated findings. |
 | [pairs/](pairs/) | Pairwise legacy-to-Rust review notes by subsystem. |

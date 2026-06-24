@@ -71,7 +71,7 @@ cargo run -p xtask -- scheduler-fixtures
 cargo run -p xtask -- rust-resources
 ```
 
-The scheduler fixture gate currently reports `60/60` semantic fixtures passing.
+The scheduler fixture gate currently reports `67/67` semantic fixtures passing.
 
 ## Evidence And Reports
 

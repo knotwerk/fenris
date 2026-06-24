@@ -1,0 +1,203 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_pending_kill_completed_transfer_preferences",
+  "source": {
+    "repo": "carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_pending_kill_on_completed_transfer_prefer_sender",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_pending_kill_on_completed_transfer_prefer_receiver"
+    ],
+    "legacy_behavior": [
+      "A pending kill after a completed sender-preferred transfer prevents the receiver from running code after receive.",
+      "A pending kill after a completed receiver-preferred transfer prevents the sender from running code after send."
+    ]
+  },
+  "check_events": false,
+  "trace_expect": {
+    "contains_in_order": [
+      {
+        "kind": "channel.transfer",
+        "channel": "sender_preferred",
+        "sender": "sender_preferred_sender",
+        "receiver": "sender_preferred_receiver",
+        "preferred_continuation": "sender_preferred_sender",
+        "balance": 0
+      },
+      {
+        "kind": "tasklet.kill",
+        "actor": "sender_preferred_sender",
+        "tasklet": "sender_preferred_receiver",
+        "pending": true,
+        "pending_exit": true
+      },
+      {
+        "kind": "channel.transfer",
+        "channel": "receiver_preferred",
+        "sender": "receiver_preferred_sender",
+        "receiver": "receiver_preferred_receiver",
+        "preferred_continuation": "receiver_preferred_receiver",
+        "balance": 0
+      },
+      {
+        "kind": "tasklet.kill",
+        "actor": "receiver_preferred_receiver",
+        "tasklet": "receiver_preferred_sender",
+        "pending": true,
+        "pending_exit": true
+      },
+      {
+        "kind": "tasklet.exit",
+        "tasklet": "receiver_preferred_sender",
+        "exception": "TaskletExit",
+        "pending": true
+      },
+      {
+        "kind": "tasklet.exit",
+        "tasklet": "sender_preferred_receiver",
+        "exception": "TaskletExit",
+        "pending": true
+      }
+    ],
+    "match_counts": [
+      {
+        "event": {
+          "kind": "tasklet.exit",
+          "exception": "TaskletExit",
+          "pending": true
+        },
+        "count": 2
+      }
+    ]
+  },
+  "scenario": {
+    "channels": [
+      {
+        "id": "sender_preferred",
+        "preference": 1
+      },
+      {
+        "id": "receiver_preferred",
+        "preference": -1
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "sender_preferred_receiver",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "sender_preferred"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "sender_preferred_receiver_after_receive_should_not_run"
+          }
+        ]
+      },
+      {
+        "id": "sender_preferred_sender",
+        "body": [
+          {
+            "op": "send",
+            "channel": "sender_preferred",
+            "value": "sender-preferred-payload"
+          },
+          {
+            "op": "kill_tasklet",
+            "tasklet": "sender_preferred_receiver",
+            "pending": true
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "sender_preferred_sender"
+          }
+        ]
+      },
+      {
+        "id": "receiver_preferred_sender",
+        "body": [
+          {
+            "op": "send",
+            "channel": "receiver_preferred",
+            "value": "receiver-preferred-payload"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver_preferred_sender_after_send_should_not_run"
+          }
+        ]
+      },
+      {
+        "id": "receiver_preferred_receiver",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "receiver_preferred"
+          },
+          {
+            "op": "kill_tasklet",
+            "tasklet": "receiver_preferred_sender",
+            "pending": true
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver_preferred_receiver"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "run_scheduler"
+    }
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": [
+      "sender_preferred_sender",
+      "receiver_preferred_receiver"
+    ],
+    "tasklets": {
+      "sender_preferred_receiver": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "pending_exit": false
+      },
+      "sender_preferred_sender": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "pending_exit": false
+      },
+      "receiver_preferred_sender": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "pending_exit": false
+      },
+      "receiver_preferred_receiver": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "pending_exit": false
+      }
+    },
+    "channels": {
+      "sender_preferred": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      },
+      "receiver_preferred": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  }
+}

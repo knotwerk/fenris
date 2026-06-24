@@ -1,0 +1,302 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "tasklet_throw_pending_immediate_delivery",
+  "source": {
+    "repo": "carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_tasklet.py::TestTaskletThrowBase::test_throw_args",
+      "tests/python/scheduler/tests/test_tasklet.py::TestTaskletThrowBase::test_throw_traceback",
+      "tests/python/scheduler/tests/test_tasklet.py::TestTaskletThrowNonImmediate::test_throw_args",
+      "tests/python/scheduler/tests/test_tasklet.py::TestKill::test_kill_pending_true"
+    ],
+    "legacy_behavior": [
+      "tasklet.throw(..., pending=False) delivers the exception immediately to a blocked tasklet and removes it from the channel queue.",
+      "tasklet.throw(..., pending=True) queues delivery until the tasklet is next run.",
+      "A pending TaskletExit can be caught by the tasklet when it resumes after scheduler.schedule_remove."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "channels": [
+      {
+        "id": "immediate_throw_channel"
+      },
+      {
+        "id": "pending_throw_channel"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "immediate_thrower",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "immediate_throw_channel"
+          },
+          {
+            "op": "catch_exception",
+            "exception": "IndexError",
+            "target": "caught_exceptions"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "immediate_throw_caught"
+          }
+        ]
+      },
+      {
+        "id": "pending_thrower",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "pending_throw_channel"
+          },
+          {
+            "op": "catch_exception",
+            "exception": "ValueError",
+            "target": "caught_exceptions"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "pending_throw_caught"
+          }
+        ]
+      },
+      {
+        "id": "pending_exit_catches",
+        "body": [
+          {
+            "op": "schedule_remove"
+          },
+          {
+            "op": "catch_exception",
+            "exception": "TaskletExit",
+            "target": "caught_exceptions"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "pending_exit_caught"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "throw",
+          "tasklet": "immediate_thrower",
+          "exception": "IndexError",
+          "value": [
+            "now"
+          ],
+          "traceback": "errfunc",
+          "pending": false
+        },
+        {
+          "op": "throw",
+          "tasklet": "pending_thrower",
+          "exception": "ValueError",
+          "value": [
+            "later"
+          ],
+          "pending": true
+        },
+        {
+          "op": "kill",
+          "tasklet": "pending_exit_catches",
+          "pending": true
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      {
+        "kind": "channel.block",
+        "actor": "immediate_thrower",
+        "channel": "immediate_throw_channel",
+        "direction": "receive",
+        "balance": -1
+      },
+      {
+        "kind": "channel.block",
+        "actor": "pending_thrower",
+        "channel": "pending_throw_channel",
+        "direction": "receive",
+        "balance": -1
+      },
+      {
+        "kind": "scheduler.schedule_remove",
+        "actor": "pending_exit_catches",
+        "tasklet": "pending_exit_catches",
+        "paused": true
+      },
+      {
+        "kind": "tasklet.throw",
+        "actor": "main",
+        "tasklet": "immediate_thrower",
+        "exception": "IndexError",
+        "pending": false,
+        "payload": {
+          "type": "IndexError",
+          "value": [
+            "now"
+          ],
+          "traceback": "errfunc"
+        }
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "main",
+        "to": "immediate_thrower",
+        "reason": "tasklet_throw"
+      },
+      {
+        "kind": "tasklet.exception.caught",
+        "tasklet": "immediate_thrower",
+        "caught": {
+          "type": "IndexError",
+          "value": [
+            "now"
+          ],
+          "traceback": "errfunc"
+        }
+      },
+      {
+        "kind": "tasklet.throw",
+        "actor": "main",
+        "tasklet": "pending_thrower",
+        "exception": "ValueError",
+        "pending": true,
+        "payload": {
+          "type": "ValueError",
+          "value": [
+            "later"
+          ],
+          "traceback": null
+        }
+      },
+      {
+        "kind": "tasklet.kill",
+        "tasklet": "pending_exit_catches",
+        "pending": true,
+        "pending_exit": true
+      },
+      {
+        "kind": "tasklet.exception.caught",
+        "tasklet": "pending_thrower",
+        "caught": {
+          "type": "ValueError",
+          "value": [
+            "later"
+          ],
+          "traceback": null
+        }
+      },
+      {
+        "kind": "tasklet.exit",
+        "tasklet": "pending_exit_catches",
+        "exception": "TaskletExit",
+        "pending": true
+      },
+      {
+        "kind": "tasklet.exception.caught",
+        "tasklet": "pending_exit_catches",
+        "caught": {
+          "type": "TaskletExit"
+        }
+      }
+    ],
+    "match_counts": [
+      {
+        "event": {
+          "kind": "tasklet.throw"
+        },
+        "count": 2
+      },
+      {
+        "event": {
+          "kind": "tasklet.exception.caught"
+        },
+        "count": 3
+      },
+      {
+        "event": {
+          "kind": "tasklet.exit"
+        },
+        "count": 1
+      }
+    ]
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": [
+      "immediate_throw_caught",
+      "pending_throw_caught",
+      "pending_exit_caught"
+    ],
+    "caught_exceptions": [
+      {
+        "type": "IndexError",
+        "value": [
+          "now"
+        ],
+        "traceback": "errfunc"
+      },
+      {
+        "type": "ValueError",
+        "value": [
+          "later"
+        ],
+        "traceback": null
+      },
+      {
+        "type": "TaskletExit"
+      }
+    ],
+    "tasklets": {
+      "immediate_thrower": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false
+      },
+      "pending_thrower": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false
+      },
+      "pending_exit_catches": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "pending_exit": false
+      }
+    },
+    "channels": {
+      "immediate_throw_channel": {
+        "balance": 0,
+        "blocked_receivers": [],
+        "blocked_senders": []
+      },
+      "pending_throw_channel": {
+        "balance": 0,
+        "blocked_receivers": [],
+        "blocked_senders": []
+      }
+    },
+    "blocked_tasklet_count": 0,
+    "blocked_channel_count": 0,
+    "active_tasklet_count": 1
+  }
+}

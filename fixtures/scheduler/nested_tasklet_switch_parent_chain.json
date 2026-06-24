@@ -1,0 +1,82 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "nested_tasklet_switch_parent_chain",
+  "source": {
+    "repo": "carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_scheduler.py::TestSwitch::*",
+      "tests/python/scheduler/tests/test_scheduler.py::TestScheduleOrderBase::test_nested_tasklet_run_order"
+    ],
+    "legacy_behavior": [
+      "Nested tasklets preserve parent identity while direct switches enter child tasklets.",
+      "When switched-to nested tasklets complete, execution resumes the switching parent tasklet in parent-chain order."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "nested_tasklets": true,
+    "tasklets": [
+      {
+        "id": "root",
+        "body": [
+          { "op": "spawn", "tasklet": "child" },
+          { "op": "switch_tasklet", "tasklet": "child" },
+          { "op": "append", "target": "completed", "value": "root" }
+        ]
+      },
+      {
+        "id": "child",
+        "initially_scheduled": false,
+        "body": [
+          { "op": "spawn", "tasklet": "grandchild" },
+          { "op": "switch_tasklet", "tasklet": "grandchild" },
+          { "op": "append", "target": "completed", "value": "child" }
+        ]
+      },
+      {
+        "id": "grandchild",
+        "initially_scheduled": false,
+        "body": [
+          { "op": "append", "target": "completed", "value": "grandchild" }
+        ]
+      }
+    ],
+    "entrypoint": { "op": "run_scheduler" }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      { "kind": "tasklet.new", "actor": "main", "tasklet": "root", "parent": "main", "depth": 0 },
+      { "kind": "scheduler.switch", "from": "main", "to": "root", "reason": "next_runnable", "to_times_switched_to": 1 },
+      { "kind": "tasklet.new", "actor": "root", "tasklet": "child", "parent": "root", "depth": 1 },
+      { "kind": "scheduler.switch", "from": "root", "to": "child", "reason": "switch_tasklet", "to_times_switched_to": 1 },
+      { "kind": "tasklet.new", "actor": "child", "tasklet": "grandchild", "parent": "child", "depth": 2 },
+      { "kind": "scheduler.switch", "from": "child", "to": "grandchild", "reason": "switch_tasklet", "to_times_switched_to": 1 },
+      { "kind": "tasklet.observed", "actor": "grandchild", "value": "grandchild" },
+      { "kind": "scheduler.switch", "from": "main", "to": "child", "reason": "resume_tasklet_switcher", "to_times_switched_to": 2 },
+      { "kind": "tasklet.observed", "actor": "child", "value": "child" },
+      { "kind": "scheduler.switch", "from": "main", "to": "root", "reason": "resume_tasklet_switcher", "to_times_switched_to": 2 },
+      { "kind": "tasklet.observed", "actor": "root", "value": "root" }
+    ],
+    "match_counts": [
+      { "event": { "kind": "scheduler.switch", "reason": "switch_tasklet" }, "count": 2 },
+      { "event": { "kind": "scheduler.switch", "reason": "resume_tasklet_switcher" }, "count": 2 },
+      { "event": { "kind": "tasklet.new", "parent": "root" }, "count": 1 },
+      { "event": { "kind": "tasklet.new", "parent": "child" }, "count": 1 }
+    ]
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": ["grandchild", "child", "root"],
+    "blocked_tasklet_count": 0,
+    "blocked_channel_count": 0,
+    "active_tasklet_count": 1,
+    "all_time_tasklet_count": 4,
+    "tasklets": {
+      "main": { "parent": null, "depth": 0, "scheduled": true, "times_switched_to": 1 },
+      "root": { "parent": "main", "depth": 0, "alive": false, "scheduled": false, "paused": false, "times_switched_to": 2 },
+      "child": { "parent": "root", "depth": 1, "alive": false, "scheduled": false, "paused": false, "times_switched_to": 2 },
+      "grandchild": { "parent": "child", "depth": 2, "alive": false, "scheduled": false, "paused": false, "times_switched_to": 1 }
+    }
+  }
+}

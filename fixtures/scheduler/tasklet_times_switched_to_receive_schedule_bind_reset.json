@@ -1,0 +1,182 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "tasklet_times_switched_to_receive_schedule_bind_reset",
+  "source": {
+    "repo": "carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_tasklet.py::TestTasklets::test_times_switched_to",
+      "tests/python/scheduler/tests/test_tasklet.py::TestTasklets::test_times_switched_to_bind_reset"
+    ],
+    "legacy_behavior": [
+      "Tasklet.cpp increments times_switched_to every time a tasklet is switched to.",
+      "A tasklet resumed from a blocked channel receive and then from scheduler.schedule observes counts 2 and 3.",
+      "Tasklet.cpp::Tasklet::Bind resets times_switched_to before a rebound callable runs again."
+    ]
+  },
+  "scenario": {
+    "channels": [
+      {
+        "id": "ch0"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "worker",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "ch0"
+          },
+          {
+            "op": "schedule"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "after_third_switch"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "send",
+          "channel": "ch0",
+          "value": null
+        },
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "bind",
+          "tasklet": "worker",
+          "body": [
+            {
+              "op": "append",
+              "target": "completed",
+              "value": "after_rebind"
+            }
+          ]
+        },
+        {
+          "op": "setup",
+          "tasklet": "worker"
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "check_events": false,
+  "trace_expect": {
+    "contains_in_order": [
+      {
+        "kind": "scheduler.switch",
+        "from": "main",
+        "to": "worker",
+        "reason": "next_runnable",
+        "to_times_switched_to": 1
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "worker",
+        "to": "main",
+        "reason": "blocked"
+      },
+      {
+        "kind": "channel.transfer",
+        "sender": "main",
+        "receiver": "worker",
+        "preferred_continuation": "worker"
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "main",
+        "to": "worker",
+        "reason": "channel_preference_receiver",
+        "to_times_switched_to": 2
+      },
+      {
+        "kind": "scheduler.schedule",
+        "actor": "worker",
+        "position": "back"
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "worker",
+        "to": "main",
+        "reason": "schedule"
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "main",
+        "to": "worker",
+        "reason": "next_runnable",
+        "to_times_switched_to": 3
+      },
+      {
+        "kind": "tasklet.bind",
+        "tasklet": "worker",
+        "times_switched_to": 0
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "main",
+        "to": "worker",
+        "reason": "next_runnable",
+        "to_times_switched_to": 1
+      }
+    ],
+    "match_counts": [
+      {
+        "event": {
+          "kind": "scheduler.switch",
+          "to": "worker"
+        },
+        "count": 4
+      },
+      {
+        "event": {
+          "kind": "tasklet.bind",
+          "tasklet": "worker",
+          "times_switched_to": 0
+        },
+        "count": 1
+      }
+    ]
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": [
+      "after_third_switch",
+      "after_rebind"
+    ],
+    "channels": {
+      "ch0": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    },
+    "tasklets": {
+      "worker": {
+        "callable_bound": true,
+        "alive": false,
+        "scheduled": false,
+        "blocked": false,
+        "paused": false,
+        "pending_exit": false,
+        "times_switched_to": 1
+      }
+    },
+    "all_time_tasklet_count": 2,
+    "active_tasklet_count": 1
+  }
+}

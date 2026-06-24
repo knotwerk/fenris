@@ -49,13 +49,13 @@ it must be aggressive in small, measurable increments.
 
 ## Current Repository Snapshot
 
-As of 2026-06-23, the scheduler Rust work is no longer just a sketch. The local
+As of 2026-06-24, the scheduler Rust work is no longer just a sketch. The local
 workspace has these useful pieces:
 
 - `carbon-scheduler-core` has a pure Rust scheduler handle layer with tasklet
-  IDs, channel IDs, run queue IDs, runnable queues, per-run-queue switch-trap
-  state, channel wait queues, same-domain send/receive matching, snapshots, and
-  basic close/clear behavior.
+  IDs, channel IDs, run queue IDs, runnable queues, per-run-queue current-tasklet
+  identity, per-run-queue switch-trap state, channel wait queues, same-domain
+  send/receive matching, snapshots, and basic close/clear behavior.
 - `carbon-scheduler-trace` runs scheduler fixtures and invariant checks.
 - `carbon-scheduler-ffi` has ABI versioning, C capsule layout checks, and panic
   containment.
@@ -65,17 +65,20 @@ workspace has these useful pieces:
   core snapshots. Current-thread runnable PyObject registry storage is now
   thread-local compatibility state while CoreScheduler remains the runnable
   ordering authority.
-- The Python bridge test suite is locally green at `57/57` tests.
-- The core/trace/FFI tests are locally green at `14/14`, `1/1`, and `3/3`
+- The Python bridge test suite is locally green at `72/72` tests.
+- The core/trace/FFI tests are locally green at `26/26`, `1/1`, and `3/3`
   respectively.
 - `cargo run -p xtask -- rust-scheduler-python` records the PyO3 bridge as a
   compatibility boundary, not the final scheduler architecture.
-- `target/carbon/evidence/scheduler-fixtures.json` passes `60/60` semantic
+- `target/carbon/evidence/scheduler-fixtures.json` passes `67/67` semantic
   fixtures, including trace-expectation bounded-pump schedule-order fixtures
   invalid direct tasklet run/switch no-mutation coverage, `scheduler.schedule`
   BACK reschedule ordering, FRONT_PLUS_ONE targeted-run boundary coverage, and
   switch-trap operation rejection without mutating schedule/schedule_remove
-  events, nested parent/depth tasklet-chain coverage, and is
+  events, nested parent/depth tasklet-chain coverage, blocked direct-switch
+  parent-chain unwind coverage, symbolic pending/immediate
+  throw delivery, catchable pending `TaskletExit`, and tasklet
+  `times_switched_to` receive/schedule/rebind reset coverage. It is
   `report_ready=true` for the scheduler fixture gate.
 - `target/carbon/evidence/legacy-scheduler.json` now passes the native Linux
   source-build path with the unchanged legacy Python unittest suite (`210`
@@ -237,9 +240,9 @@ is the shortest path from the current progress report to the final HTML report.
 
 | Gate | Current evidence | Blocker | Next proof |
 | --- | --- | --- | --- |
-| Scheduler semantic fixtures | `scheduler-fixtures.json` passes 60/60 fixtures, including limited `run_n_tasklets(1)` schedule-order fixtures, invalid direct tasklet run/switch no-mutation coverage, `scheduler.schedule` BACK requeue ordering, FRONT_PLUS_ONE targeted-run boundary trace expectations, switch-trap trapped-operation counts with zero mutating schedule/schedule_remove events, scheduler callback previous/next switch-point trace expectations, nested tasklet parent/depth chain coverage, single blocked-queue membership, fixture-level blocked-channel teardown cleanup, and scheduler-level `unblock_all_channels` cleanup with active-channel count invariants, `report_ready=true` | Closed for the current deterministic core fixture gate | Keep this gate green while core ownership moves out of the Python bridge; add new fixtures when ownership changes touch tasklet, channel, timeout, switch-trap, callback, or cleanup semantics. |
+| Scheduler semantic fixtures | `scheduler-fixtures.json` passes 67/67 fixtures, including limited `run_n_tasklets(1)` schedule-order fixtures, invalid direct tasklet run/switch no-mutation coverage, `scheduler.schedule` BACK requeue ordering, FRONT_PLUS_ONE targeted-run boundary trace expectations, tasklet `times_switched_to` receive/schedule/rebind reset coverage, nested direct-switch parent-chain resume order, blocked direct-switch parent-chain unwind after channel wakeup, switch-trap trapped-operation counts with zero mutating schedule/schedule_remove events, scheduler callback previous/next switch-point trace expectations, nested tasklet parent/depth chain coverage, single blocked-queue membership, pending-kill completed-transfer preference coverage, raised-exception re-block cleanup, symbolic tasklet exception delivery, symbolic pending/immediate `tasklet.throw` delivery, catchable pending `TaskletExit`, fixture-level blocked-channel teardown cleanup, and scheduler-level `unblock_all_channels` cleanup with active-channel count invariants, `report_ready=true` | Closed for the current deterministic core fixture gate | Keep this gate green while core ownership moves out of the Python bridge; add new fixtures when ownership changes touch tasklet, channel, timeout, switch-trap, callback, or cleanup semantics. |
 | Legacy scheduler baseline | `legacy-scheduler.json` passes `cargo run -p xtask -- legacy-scheduler native-linux` on this host with `210` Python tests, `7` skips, and `36/36` C API CTest cases, `report_ready=true` | Closed for this host | Keep this gate green before publishing scheduler comparison evidence. |
-| Rust scheduler Python/C API | `rust-scheduler-python.json` passes, `core_ownership_status.status=partial`; covered channel transfers now use core-owned payload handoff tokens, blocked send/receive tasklet state projection, live channel-continuation projection, current-tasklet channel handoff requeue projection, `schedule_remove` pause projection, and blocked throw cleanup read core snapshots, public tasklet call/setup/insert/run/switch/bind/unbind/dont_raise guards plus C API block-trap reads consult core snapshots, and schedule-manager refcount/weakref/thread-cache teardown is covered while PyO3 stores the actual Python value/exception objects | Queue identity adapters, remaining lifecycle decisions, callbacks, broader refcount/GC, Python payload object storage, and in-process C API coverage are not final | Make `CoreScheduler` snapshots authoritative for the remaining lifecycle/channel decisions while PyO3 holds only compatibility payload objects; keep unchanged Python tests and C API source slices green. |
+| Rust scheduler Python/C API | `rust-scheduler-python.json` passes, `core_ownership_status.status=partial`; covered channel transfers now use core-owned payload handoff tokens, blocked send/receive tasklet state projection, live channel-continuation delivery-state projection, current-tasklet channel handoff requeue projection, `schedule_remove` pause projection, and blocked throw cleanup read core snapshots. Public scheduler current/run-count/counter APIs, nested-tasklet mode, schedule/channel callback registration metadata, tasklet main/parent/callable-bound/bound-argument/block-trap/dont_raise/highlighted/context/method-module-file-line-parent-callsite/timing/channel-callback/delivery-state snapshots, tasklet guards, highlighted/context/callsite/timing getters, C API `PyTasklet_IsMain`/`PyTasklet_Alive`/block-trap/context reads, dead-tasklet kill no-op decisions, timeout completion accounting, and paused direct-run eligibility are CoreScheduler-backed while PyO3 stores Python value/exception objects in a token registry and stores callable/args/kwargs objects and context-manager/exception-handler callables. | Queue identity adapters, remaining Greenlet lifecycle decisions, callback callable invocation/storage, broader refcount/GC, Python payload/exception registry contents, actual Python callable/args/kwargs execution, and in-process C API coverage are not final. | Make `CoreScheduler` snapshots authoritative for the remaining lifecycle/channel decisions while PyO3 holds only compatibility payload objects; keep unchanged Python tests and C API source slices green. |
 | Realistic IO workloads | `io-workloads.json` passes loopback and fixture-only traces; `io-workloads` can now import timing-free normalized trace artifacts from `CARBON_LEGACY_CARBONIO_TRACE_JSON` and `CARBON_RUST_CARBONIO_TRACE_JSON` | No captured legacy `carbonio`/`_socket`/`_ssl` semantic trace comparison from supported-platform artifacts | Capture or import supported-platform legacy Carbon IO traces and compare normalized wake/send/throw events against the Rust bridge until `legacy_carbonio_trace_status=pass`. |
 | Scheduler benchmark comparability | `scheduler-comparison.json` has matched legacy C++ scheduler vs Rust scheduler bridge pressure rows with semantic checksums, throughput, p99/p99.9, CPU p95, peak RSS p95, and throughput CV | Real game-environment validation is still not captured | Use the lab rows for clearly labeled scheduler comparison, then add a real game trace or harness before production scheduler claims. |
 | Final report | `report-progress` writes HTML; `report` exits `1` | Multiple evidence files have `report_ready=false` | Every feature/performance claim in the final report links to passing, report-ready evidence. |

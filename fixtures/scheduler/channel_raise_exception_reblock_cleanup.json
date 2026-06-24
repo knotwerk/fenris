@@ -1,0 +1,333 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_raise_exception_reblock_cleanup",
+  "source": {
+    "repo": "carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_receive_on_channel_that_had_previously_been_blocked_and_continued_after_an_exception_is_raised_on_it",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_send_on_channel_that_had_previously_been_blocked_and_continued_after_an_exception_is_raised_on_it"
+    ],
+    "legacy_behavior": [
+      "When an exception is raised into a blocked receiver, Channel::Receive removes that tasklet from the blocked queue, clears blocked state, and lets caught Python code receive again without corrupting channel balance.",
+      "When an exception is raised into a blocked sender, Channel::Send removes that tasklet from the blocked queue, clears transfer arguments, and lets caught Python code send again without corrupting channel balance."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "channels": [
+      {
+        "id": "receive_cleanup"
+      },
+      {
+        "id": "send_cleanup"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "receiver_blocker",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "receive_cleanup"
+          },
+          {
+            "op": "catch_exception",
+            "exception": "RuntimeError",
+            "target": "caught_exceptions"
+          },
+          {
+            "op": "receive",
+            "channel": "receive_cleanup",
+            "bind": "receiver_blocker_value"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver_blocker"
+          }
+        ]
+      },
+      {
+        "id": "receiver_peer",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "receive_cleanup",
+            "bind": "receiver_peer_value"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "receiver_peer"
+          }
+        ]
+      },
+      {
+        "id": "sender_peer",
+        "body": [
+          {
+            "op": "send",
+            "channel": "send_cleanup",
+            "value": "sender_peer_value"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "sender_peer"
+          }
+        ]
+      },
+      {
+        "id": "sender_blocker",
+        "body": [
+          {
+            "op": "send",
+            "channel": "send_cleanup",
+            "value": "discarded_before_exception"
+          },
+          {
+            "op": "catch_exception",
+            "exception": "RuntimeError",
+            "target": "caught_exceptions"
+          },
+          {
+            "op": "send",
+            "channel": "send_cleanup",
+            "value": "sender_blocker_value"
+          },
+          {
+            "op": "append",
+            "target": "completed",
+            "value": "sender_blocker"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "raise_exception",
+          "tasklet": "receiver_blocker",
+          "exception": "RuntimeError"
+        },
+        {
+          "op": "raise_exception",
+          "tasklet": "sender_blocker",
+          "exception": "RuntimeError"
+        },
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "send",
+          "channel": "receive_cleanup",
+          "value": 101
+        },
+        {
+          "op": "send",
+          "channel": "receive_cleanup",
+          "value": 202
+        },
+        {
+          "op": "receive",
+          "channel": "send_cleanup",
+          "bind": "main_received"
+        },
+        {
+          "op": "receive",
+          "channel": "send_cleanup",
+          "bind": "main_received"
+        },
+        {
+          "op": "run_scheduler"
+        }
+      ]
+    }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      {
+        "kind": "channel.block",
+        "channel": "receive_cleanup",
+        "actor": "receiver_blocker",
+        "direction": "receive",
+        "balance": -1
+      },
+      {
+        "kind": "channel.block",
+        "channel": "receive_cleanup",
+        "actor": "receiver_peer",
+        "direction": "receive",
+        "balance": -2
+      },
+      {
+        "kind": "channel.block",
+        "channel": "send_cleanup",
+        "actor": "sender_peer",
+        "direction": "send",
+        "balance": 1
+      },
+      {
+        "kind": "channel.block",
+        "channel": "send_cleanup",
+        "actor": "sender_blocker",
+        "direction": "send",
+        "balance": 2
+      },
+      {
+        "kind": "tasklet.raise_exception",
+        "tasklet": "receiver_blocker",
+        "exception": "RuntimeError"
+      },
+      {
+        "kind": "tasklet.raise_exception",
+        "tasklet": "sender_blocker",
+        "exception": "RuntimeError"
+      },
+      {
+        "kind": "tasklet.exception.caught",
+        "tasklet": "receiver_blocker",
+        "caught": {
+          "type": "RuntimeError"
+        }
+      },
+      {
+        "kind": "channel.block",
+        "channel": "receive_cleanup",
+        "actor": "receiver_blocker",
+        "direction": "receive",
+        "balance": -2,
+        "blocked_receivers": [
+          "receiver_peer",
+          "receiver_blocker"
+        ]
+      },
+      {
+        "kind": "tasklet.exception.caught",
+        "tasklet": "sender_blocker",
+        "caught": {
+          "type": "RuntimeError"
+        }
+      },
+      {
+        "kind": "channel.block",
+        "channel": "send_cleanup",
+        "actor": "sender_blocker",
+        "direction": "send",
+        "balance": 2,
+        "blocked_senders": [
+          "sender_peer",
+          "sender_blocker"
+        ]
+      },
+      {
+        "kind": "channel.transfer",
+        "channel": "receive_cleanup",
+        "sender": "main",
+        "receiver": "receiver_peer",
+        "value": 101,
+        "balance": -1
+      },
+      {
+        "kind": "channel.transfer",
+        "channel": "receive_cleanup",
+        "sender": "main",
+        "receiver": "receiver_blocker",
+        "value": 202,
+        "balance": 0
+      },
+      {
+        "kind": "channel.transfer",
+        "channel": "send_cleanup",
+        "sender": "sender_peer",
+        "receiver": "main",
+        "value": "sender_peer_value",
+        "balance": 1
+      },
+      {
+        "kind": "channel.transfer",
+        "channel": "send_cleanup",
+        "sender": "sender_blocker",
+        "receiver": "main",
+        "value": "sender_blocker_value",
+        "balance": 0
+      }
+    ],
+    "match_counts": [
+      {
+        "event": {
+          "kind": "tasklet.exception.caught",
+          "caught": {
+            "type": "RuntimeError"
+          }
+        },
+        "count": 2
+      }
+    ]
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": [
+      "receiver_peer",
+      "receiver_blocker",
+      "sender_peer",
+      "sender_blocker"
+    ],
+    "caught_exceptions": [
+      {
+        "type": "RuntimeError"
+      },
+      {
+        "type": "RuntimeError"
+      }
+    ],
+    "main_received": [
+      "sender_peer_value",
+      "sender_blocker_value"
+    ],
+    "tasklets": {
+      "receiver_blocker": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "receiver_blocker_value": 202
+      },
+      "receiver_peer": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "receiver_peer_value": 101
+      },
+      "sender_blocker": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false
+      },
+      "sender_peer": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false
+      }
+    },
+    "channels": {
+      "receive_cleanup": {
+        "balance": 0,
+        "blocked_receivers": [],
+        "blocked_senders": []
+      },
+      "send_cleanup": {
+        "balance": 0,
+        "blocked_receivers": [],
+        "blocked_senders": []
+      }
+    },
+    "blocked_tasklet_count": 0,
+    "blocked_channel_count": 0,
+    "active_tasklet_count": 1
+  }
+}

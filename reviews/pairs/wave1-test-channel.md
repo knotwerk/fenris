@@ -19,7 +19,7 @@ Rust target:
 - `SCH-PYTEST-CHANNEL-003`: done; immediate receive/send and receive/send after runnable-child drain deadlocks are covered.
 - `SCH-PYTEST-CHANNEL-004`: partial; pure-core preference order is covered for the current matrix, while Python-visible tasklet identity assertions remain bridge work.
 - `SCH-PYTEST-CHANNEL-005`: done; block-trap no-mutation fixtures cover main and worker send/receive cases.
-- `SCH-PYTEST-CHANNEL-006`: partial; blocked cleanup fixtures exist, while pending-kill completed-transfer and broader Python TaskletExit cleanup remain open.
+- `SCH-PYTEST-CHANNEL-006`: partial; blocked cleanup, pending-kill completed-transfer, and raised-exception re-block cleanup fixtures exist, while broader Python TaskletExit/object cleanup remains open.
 
 ## Required Fixtures
 

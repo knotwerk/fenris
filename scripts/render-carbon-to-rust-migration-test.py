@@ -21,10 +21,10 @@ DEFAULT_GUIDE_OUTPUT = Path("target/carbon/report/carbon-to-rust-reporting-guide
 # - The key stats table is the single place for performance stats.
 # - Each workload row keeps the same contract: original path, Rust parity path,
 #   Rust architecture path, speed/scale, p99/tail, CPU/RSS, batch/scale, and
-#   readout/TODO.
+#   readout/evidence status.
 # - Group related Arrow IPC, Parquet, scheduler pressure, socket, and resource
 #   tests into one summary row; split only when the decision differs.
-# - If a lane has no measurement, leave a visible TODO cell, especially for
+# - If a lane has no measurement, leave a visible evidence-gap cell, especially for
 #   Network / IO and architecture-only probes.
 # - Do not render task lists, repeated benchmark dumps, collapsed duplicate
 #   tables, or a speedup claim unless original and replacement measure the same
@@ -948,7 +948,7 @@ def fmt_ratio_range(values: list[float], *, faster_label: str = "faster", slower
 def fmt_plain_ratio_range(values: list[object]) -> str:
     numeric = [float(value) for value in values if number(value) is not None]
     if not numeric:
-        return "TODO"
+        return "Not measured"
     low = min(numeric)
     high = max(numeric)
     if abs(low - high) < 0.005:
@@ -1168,7 +1168,7 @@ def html_cell(title: str, note: str = "") -> str:
 
 
 def todo_cell(note: str = "not measured yet") -> str:
-    return f"<strong>TODO</strong><small>{h(note)}</small>"
+    return f"<strong>Not measured</strong><small>{h(note)}</small>"
 
 
 def median_path_value(rows: list[dict], path: str) -> float | None:
@@ -1318,9 +1318,9 @@ def headline_speedup_cell(
         if vs_parity:
             architecture_text += f"; {fmt_plain_ratio_range(vs_parity)} vs parity"
     elif architecture_rows:
-        architecture_text = "measured; multiple TODO"
+        architecture_text = "measured; multiple pending"
     else:
-        architecture_text = "TODO"
+        architecture_text = "Not measured"
     return (
         "<div class=\"headline-speedup\">"
         f"<strong><span>Parity</span>{h(parity_text)}</strong>"
@@ -1332,13 +1332,13 @@ def headline_speedup_cell(
 def headline_speedup_architecture_only(label: str, values: list[object], note: str = "vs old") -> str:
     return (
         "<div class=\"headline-speedup\">"
-        "<strong><span>Parity</span>TODO</strong>"
+        "<strong><span>Parity</span>Not measured</strong>"
         f"<strong><span>{h(label)}</span>{h(fmt_plain_ratio_range(values))} {h(note)}</strong>"
         "</div>"
     )
 
 
-def headline_speedup_todo(parity_note: str = "TODO", architecture_note: str = "TODO") -> str:
+def headline_speedup_todo(parity_note: str = "Not measured", architecture_note: str = "Not measured") -> str:
     return (
         "<div class=\"headline-speedup\">"
         f"<strong><span>Parity</span>{h(parity_note)}</strong>"
@@ -1379,7 +1379,7 @@ def top_summary_cards(
         (
             "Parity reality",
             f"Scheduler parity is {scheduler_parity}",
-            "The legacy C++ scheduler extension is already well optimized around Python/Stackless interop; the long-term target shape is Rust-owned scheduling that avoids that interop cost, while the same Python interface remains the parity gate.",
+            "The legacy C++ scheduler extension is already well optimized around Python/Stackless interop and is more directly tied to CPython than the current Rust/PyO3 bridge. Some same-API gap may therefore be bridge integration overhead, not scheduler semantics alone.",
         ),
         (
             "No Python interop",
@@ -1407,6 +1407,18 @@ def top_summary_cards(
     )
 
 
+def python_nogil_probe_note() -> str:
+    title = "Python 3.14t no-GIL scratch probe"
+    body = (
+        "target/carbon/nogil-experiment/ showed the current legacy scheduler "
+        "extension is not a ready Original no-GIL baseline. A 3.14t rebuild "
+        "needed C API compatibility work, then _scheduler re-enabled the GIL on "
+        "import by default; forced PYTHON_GIL=0 stayed no-GIL but only measured "
+        "about 1.00x-1.04x on tiny same-API scheduler workloads."
+    )
+    return f"<div class=\"callout\"><strong>{h(title)}:</strong> {h(body)}</div>"
+
+
 def render_reporting_guide(generated: str) -> str:
     sections = [
         (
@@ -1415,7 +1427,7 @@ def render_reporting_guide(generated: str) -> str:
                 "The public report is target/carbon/report/carbon-to-rust-migration-test.html.",
                 "Keep the public report executive-readable: top summary cards first, then one Key Stats table.",
                 "Do not add visible report rules, methodology dumps, task lists, or repeated standalone benchmark tables; use scoped collapsible detail rows under grouped Key Stats rows when detail improves clarity.",
-                "Use target/carbon/report/carbon-to-rust-reporting-guide.html as the handoff guide for agents completing TODOs.",
+                "Use target/carbon/report/carbon-to-rust-reporting-guide.html as the handoff guide for agents completing evidence gaps.",
             ],
         ),
         (
@@ -1426,7 +1438,7 @@ def render_reporting_guide(generated: str) -> str:
                 "Keep the lane structure: Original, Rust Parity, Rust Architecture, then Scale / Readout.",
                 "Each lane should carry throughput or scale, p99/tail latency, CPU, memory/RSS, and batch/scale where relevant.",
                 "A summary row must be understandable without expansion; an optional collapsible detail row immediately below it may carry the supporting benchmark rows for that group.",
-                "Leave visible TODO cells where evidence is missing. Do not hide gaps in prose.",
+                "Leave visible evidence-gap cells where evidence is missing. Do not hide gaps in prose.",
             ],
         ),
         (
@@ -1434,6 +1446,7 @@ def render_reporting_guide(generated: str) -> str:
             [
                 "Only claim a speedup when old and new measure the same end-to-end function.",
                 "For scheduler work, keep C++/Python API parity separate from pure Rust/no-Python architecture rows.",
+                "Call out that the legacy C++ scheduler is more directly integrated with CPython than the Rust/PyO3 compatibility bridge; a tighter Rust/Python integration could reduce some of the observed same-API gap.",
                 "For resources/catalog work, compare YAML/text encode, compression, transmit, decompress, and parse against Arrow IPC or Parquet write, transmit, and read for the same logical records.",
                 "For IO, each socket/TLS row needs matched legacy Carbon IO throughput, p99/tail, CPU, and RSS before it can claim speedup.",
                 "Do not invent percentages or headline claims that are not present in evidence JSON.",
@@ -1444,18 +1457,18 @@ def render_reporting_guide(generated: str) -> str:
             [
                 "Keep summary cards short and evidence-backed.",
                 "Good themes: port evidence is real; same-interface scheduler parity is currently slower; Python interop is a major cost; pure Rust/no-Python architecture shows large upside; Arrow/Parquet/IPC removes YAML transport overhead; Rust can reduce memory pressure.",
-                "If a top-card claim cannot be traced to Key Stats or evidence JSON, remove it or mark the matching table lane TODO.",
+                "If a top-card claim cannot be traced to Key Stats or evidence JSON, remove it or mark the matching table lane not measured.",
             ],
         ),
         (
-            "Open TODOs",
+            "Open TODOs / Evidence Gaps",
             [
                 "Fill matched legacy Carbon IO baselines for every Network / IO row: throughput, p99/p99.9, CPU, RSS, memory, payload, concurrency, and speedup.",
                 "Continue the scheduler optimization loop: improve same-Python-interface parity while keeping no-Python architecture rows separate.",
                 "Add production or game-trace scheduler rows before claiming production scheduler performance.",
                 "Extend resources/catalog evidence with CPU/RSS split for old YAML/text and new Arrow IPC/Parquet paths.",
                 "Add batch, vectorized, Rayon, SIMD, Arrow IPC, and Parquet architecture rows only when they measure a clear replacement function and are labeled as architecture changes.",
-                "Replace TODO cells in the table instead of adding explanatory paragraphs below the report.",
+                "Replace evidence-gap cells in the table instead of adding explanatory paragraphs below the report.",
             ],
         ),
         (
@@ -1569,7 +1582,7 @@ def render_reporting_guide(generated: str) -> str:
 <body>
   <header>
     <p class="eyebrow">Carbon to Rust migration test</p>
-    <h1>Reporting guide and TODO standard.</h1>
+    <h1>Reporting guide and evidence-gap standard.</h1>
     <p class="lead">Use this companion guide when filling evidence gaps or editing the report. It is intentionally separate from the public migration report.</p>
     <p class="lead">Generated {h(generated)}.</p>
   </header>
@@ -1706,6 +1719,7 @@ def scheduler_group_detail_row(
 ) -> str:
     body = f"""
 <div class="dashboard-detail-content">
+  <p class="detail-note">The same-API rows compare the legacy C++ scheduler extension with the Rust/PyO3 compatibility bridge. The C++ path is closer to CPython/Stackless internals than the current PyO3 bridge, so part of the measured gap may be bridge integration overhead. The native rows keep the target architecture separate.</p>
   <div class="dashboard-detail-panel">
     <h3>Same Python API Rows</h3>
     <div class="dashboard-detail-table-wrap">
@@ -2047,7 +2061,7 @@ def feature_dashboard_rows(
         rows_html.append(
             dashboard_row(
                 "Resource catalog interchange",
-                headline_speedup_todo("n/a", "TODO"),
+                headline_speedup_todo("n/a", "Not measured"),
                 html_cell("YAML/text resource catalog", "old path"),
                 todo_cell("end-to-end old path missing"),
                 todo_cell("old path p99 missing"),
@@ -2073,7 +2087,7 @@ def feature_dashboard_rows(
         rows_html.append(
             dashboard_row(
                 f"Network / IO {kind}",
-                headline_speedup_todo("TODO", "pressure only"),
+                headline_speedup_todo("Not measured", "pressure only"),
                 html_cell("Carbon IO baseline", f"{payload}; concurrency {concurrency}"),
                 todo_cell("matched legacy Carbon IO throughput missing"),
                 todo_cell("matched legacy Carbon IO p99 missing"),
@@ -2099,7 +2113,7 @@ def feature_dashboard_rows(
                     f"{payload}; concurrency {concurrency}",
                     f"{fmt_int(pressure.get('requests_per_connection'))} requests/connection",
                 ),
-                "Keep as TODO until each IO row has a matched legacy Carbon IO baseline.",
+                "Keep as an evidence gap until each IO row has a matched legacy Carbon IO baseline.",
             )
         )
 
@@ -2457,7 +2471,7 @@ def architecture_takeaway_cards() -> str:
     items = [
         (
             "Same public scheduler",
-            "The legacy C++ scheduler extension is tuned for Python/Stackless interop, and the Rust bridge is tested through the same Python tasklet/channel API, so the comparison is about preserving behavior before removing interop cost.",
+            "The legacy C++ scheduler extension is tuned close to Python/Stackless internals, while the Rust bridge uses PyO3 as a compatibility layer. The same-API comparison preserves behavior first and exposes integration overhead separately from the no-Python target architecture.",
         ),
         (
             "Rust-owned scheduling state",
@@ -2609,7 +2623,7 @@ def performance_breakdown_cards(
             scope_card(
                 "Scheduler same-API comparison",
                 "old vs Rust",
-                "Legacy C++ scheduler extension and Rust scheduler bridge run the same Python tasklet/channel workloads. This is the primary scheduler comparison.",
+                "Legacy C++ scheduler extension and Rust/PyO3 scheduler bridge run the same Python tasklet/channel workloads. The C++ path is more directly integrated with CPython, so this row is the compatibility comparison, not the final architecture cost model.",
                 [
                     ("Rows", fmt_int(scheduler_summary["rows"])),
                     ("Throughput", fmt_directional_ratio(scheduler_summary["median_speedup"])),
@@ -2861,7 +2875,7 @@ def catalog_serialization_summary_rows(scalability_evidence: dict) -> str:
     if not interchange_rows and not native_rows and not text_rows:
         return (
             "<tr>"
-            "<td colspan=\"7\"><strong>TODO</strong><small>No catalog serialization rows found in scalability evidence.</small></td>"
+            "<td colspan=\"7\"><strong>Not measured</strong><small>No catalog serialization rows found in scalability evidence.</small></td>"
             "</tr>"
         )
 
@@ -2923,7 +2937,7 @@ def catalog_serialization_detail_rows(scalability_evidence: dict) -> str:
     native_rows = native_resource_rows_data(scalability_evidence)
     text_rows = catalog_text_baseline_rows(scalability_evidence)
     if not interchange_rows and not native_rows and not text_rows:
-        return '<tr><td colspan="8"><strong>TODO</strong><small>No catalog serialization detail rows available.</small></td></tr>'
+        return '<tr><td colspan="8"><strong>Not measured</strong><small>No catalog serialization detail rows available.</small></td></tr>'
 
     rendered = []
     for row in sorted(
@@ -3021,14 +3035,14 @@ def scalability_io_rows(rows: list[dict]) -> str:
         rendered.append(
             "<tr>"
             f"<td><strong>{h(label)}</strong><small>{h(payload)} B payload; concurrency {h(concurrency)}</small></td>"
-            "<td class=\"todo-cell\"><strong>TODO</strong><small>capture matched legacy Carbon IO baseline for this payload and concurrency.</small></td>"
+            "<td class=\"todo-cell\"><strong>Needs evidence</strong><small>capture matched legacy Carbon IO baseline for this payload and concurrency.</small></td>"
             f"<td><strong>{h(fmt_rate(row.get('throughput_requests_per_sec'), 'requests'))}</strong><small>{h(fmt_rate(row.get('throughput_network_bytes_per_sec'), 'bytes'))} network throughput</small></td>"
-            "<td class=\"multiple-cell todo-cell\"><strong>TODO</strong><small>needs original Carbon IO row</small></td>"
+            "<td class=\"multiple-cell todo-cell\"><strong>Not measured</strong><small>needs original Carbon IO row</small></td>"
             f"<td>{h(fmt_us(path_value(row, '/latency_us_extended/p99')))}</td>"
             f"<td>{h(fmt_us(path_value(row, '/latency_us_extended/p99_9')))}</td>"
             f"<td>{h(fmt_percent(path_value(row, '/process_stats/cpu_percent/p95')))}</td>"
             f"<td>{h(fmt_kb(path_value(row, '/process_stats/max_rss_kb/p95')))}<small>CV {h(fmt_cv(path_value(row, '/stability/coefficient_of_variation')))}</small></td>"
-            f"<td class=\"todo-cell\"><strong>TODO</strong><small>make this a legacy-vs-Rust IO comparison; current scope: {h(row.get('claim_scope'))}</small></td>"
+            f"<td class=\"todo-cell\"><strong>Needs evidence</strong><small>make this a legacy-vs-Rust IO comparison; current scope: {h(row.get('claim_scope'))}</small></td>"
             "</tr>"
         )
     return "\n".join(rendered)
@@ -3846,6 +3860,13 @@ def render(evidence_dir: Path) -> str:
       gap: 16px;
       margin-top: 12px;
     }
+    .dashboard-detail-content .detail-note {
+      margin: 0;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      background: var(--wash);
+      color: var(--muted);
+    }
     .dashboard-detail-panel {
       overflow: hidden;
       border: 1px solid var(--line);
@@ -3982,6 +4003,7 @@ def render(evidence_dir: Path) -> str:
       <div class="summary-grid">
         $top_summary_cards
       </div>
+      $python_nogil_probe_note
     </section>
 
     <section>
@@ -4017,7 +4039,7 @@ def render(evidence_dir: Path) -> str:
               <th>Latency / tail</th>
               <th>CPU / memory</th>
               <th>Batch / scale</th>
-              <th>Readout / TODO</th>
+              <th>Readout / Evidence gap</th>
             </tr>
           </thead>
           <tbody>
@@ -4049,6 +4071,7 @@ def render(evidence_dir: Path) -> str:
             fixtures_evidence,
             scalability_evidence,
         ),
+        python_nogil_probe_note=python_nogil_probe_note(),
         scheduler_rows=scheduler_port_rows(rows),
         scheduler_architecture_pressure_rows=scheduler_architecture_pressure_rows(
             rows,
