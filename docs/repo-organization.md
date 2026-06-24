@@ -11,8 +11,8 @@ report rendering.
 | --- | --- | --- |
 | `fenris` | Evidence workbench, `xtask`, report scripts, docs, review notes, submodule pins | Share with sanitized evidence and clear gate status. |
 | `carbon-scheduler-rs` | Rust scheduler implementation, trace fixtures, FFI shell, PyO3 bridge | Standalone Rust migration repo. |
-| `carbon-resources-rs` | Rust resources implementation, compatibility adapters, native catalog experiments | Private standalone Rust migration repo under `knotwerk`; Fenris records it as a submodule. |
-| `carbonengine/core`, `carbonengine/resources`, `carbonengine/scheduler` | CarbonEngine source repos with migration host-enablement patches | Pinned to private Knotwerk mirrors so Fenris does not depend on machine-local commits. Upstream remains the source to reconcile with later. |
+| `carbon-resources-rs` | Rust resources implementation, compatibility adapters, native catalog experiments | Public standalone Rust migration repo under `knotwerk`; Fenris records it as a submodule. |
+| `carbonengine/core`, `carbonengine/resources`, `carbonengine/scheduler` | CarbonEngine source repos with migration host-enablement patches | Pinned to public Knotwerk mirrors so Fenris does not depend on machine-local commits. Upstream remains the source to reconcile with later. |
 | `carbonengine/io`, `carbonengine/vcpkg-registry` | Upstream CarbonEngine repos used without local Fenris patches | Keep on upstream CarbonEngine URLs. |
 
 The Knotwerk GitHub organization is operated by ReLU ehf. Use `ReLU ehf` for new
@@ -31,15 +31,15 @@ Keep the CarbonEngine repos as submodules unless one of these is true:
 
 When a fork or branch is needed, prefer an upstreamable patch branch over a
 divergent fork. Fenris should pin the exact commit SHA and record why that SHA is
-not an upstream tag. The current patched CarbonEngine submodules are private
+not an upstream tag. The current patched CarbonEngine submodules are public
 Knotwerk mirrors, not permanent forks.
 
 ## Current CarbonEngine Patch State
 
 These CarbonEngine deltas are required evidence context. They are saved in
-private Knotwerk mirrors so the Fenris submodule pins are fetchable by invited
-client reviewers, but they should still be upstreamed or otherwise reconciled
-before a fully public handoff:
+public Knotwerk mirrors so the Fenris submodule pins are fetchable without
+invite friction, but they should still be upstreamed or otherwise reconciled
+after public handoff:
 
 - `carbonengine/core`: one host-compatibility commit on
   `https://github.com/knotwerk/carbonengine-core.git`.
@@ -54,8 +54,8 @@ before a fully public handoff:
   - `scheduler: fix Python boolean argument parsing`
 
 Do not bury these deltas inside Fenris evidence. They need a visible ownership
-decision after client review: upstream PR, long-lived private branch, patch
-queue, or deliberate public fork.
+decision after client review: upstream PR, long-lived mirror branch, patch
+queue, or deliberate fork.
 
 ## Cleanup Rules
 

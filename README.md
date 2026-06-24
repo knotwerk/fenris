@@ -16,16 +16,17 @@ for every migrated component.
 - `carbon-resources-rs` contains the Rust resources model, compatibility
   adapters, bundle/patch helpers, and native catalog format experiments.
 - Patched CarbonEngine baselines for `core`, `resources`, and `scheduler` are
-  pinned to private Knotwerk mirrors so the recorded submodule SHAs are
-  fetchable by invited reviewers.
+  pinned to public Knotwerk mirrors so the recorded submodule SHAs are
+  fetchable by reviewers.
 - `carbonengine/io` remains an upstream submodule for dependency and trace
   classification; it has not been forked into Knotwerk.
 - Generated evidence and HTML reports are written under `target/carbon/` and
   are not tracked in git.
 
-The repository is suitable for invited client review once the reviewer has
-access to the private Knotwerk submodules. Making everything public is a
-separate release decision because some submodules are still private mirrors.
+The repository is public-review ready as a recursive checkout. Submodules keep
+their own licenses and notices, and the patched CarbonEngine mirrors still need
+an ownership decision after review: upstream PRs, long-lived mirrors, patch
+queues, or deliberate forks.
 
 ## Repository Map
 
@@ -55,8 +56,9 @@ For an existing checkout:
 git submodule update --init --recursive
 ```
 
-If a submodule cannot be fetched, confirm that the GitHub account has access to
-the relevant private Knotwerk repository.
+If a submodule cannot be fetched, confirm the URL, network access, and
+credential helper state. Private Knotwerk access should not be required for the
+public mirrors listed above.
 
 ## First Checks
 

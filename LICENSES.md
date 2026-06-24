@@ -34,6 +34,6 @@ before preparing a source distribution.
 - Generated evidence and HTML reports may reference submodule behavior, but they
   should not embed third-party source code unless the corresponding license and
   notice text is included.
-- A public Fenris release needs a final decision on whether the private
-  Knotwerk mirrors remain private, become public, or are replaced by upstreamed
-  CarbonEngine commits.
+- The public Fenris checkout uses public Knotwerk mirrors for patched
+  CarbonEngine baselines. Any source archive still needs to preserve every
+  submodule license and notice file.
