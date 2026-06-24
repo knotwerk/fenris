@@ -9,7 +9,7 @@ use carbon_resources_core::{
     diff_legacy_resource_catalogs, export_legacy_csv_resource_group, export_legacy_diff,
     export_legacy_local_relative_resources, export_legacy_yaml_bundle_resource_group,
     export_legacy_yaml_patch_resource_group, export_legacy_yaml_resource_group, gzip_compress,
-    md5_hex, merge_legacy_resource_catalogs, parse_legacy_csv_resource_group,
+    gzip_decompress, md5_hex, merge_legacy_resource_catalogs, parse_legacy_csv_resource_group,
     parse_legacy_filter_index_mapping_yaml, parse_legacy_filter_ini,
     parse_legacy_yaml_bundle_resource_group, parse_legacy_yaml_patch_resource_group,
     parse_legacy_yaml_resource_group, remove_legacy_resources,
@@ -20,7 +20,8 @@ use carbon_resources_core::{
     ResourceRecord,
 };
 use carbon_scheduler_core::{
-    run_scenario, ChannelSpec, CoreScheduler, Entrypoint, Operation, Scenario, TaskletSpec,
+    run_scenario, ChannelSpec, CoreChannelOperationResult, CoreRunQueueId, CoreScheduler,
+    CoreTaskletId, Entrypoint, Operation, Scenario, TaskletSpec,
 };
 use carbon_scheduler_trace::{assert_report_pass, run_fixture_dir};
 use serde_json::{json, Value};
@@ -34,6 +35,9 @@ use std::process::{Command, Output};
 use std::time::Instant;
 
 const EVIDENCE_DIR: &str = "target/carbon/evidence";
+const SCHEDULER_RS_MANIFEST: &str = "carbon-scheduler-rs/Cargo.toml";
+const RESOURCES_RS_MANIFEST: &str = "carbon-resources-rs/Cargo.toml";
+const FENRIS_CARGO_TARGET_DIR: &str = "target";
 const LEGACY_CARBONIO_TRACE_SCOPE: &str = "normalized semantic events for carbonio/_socket/_ssl module patching, socketpair creation, recv block, send wake, dispatch wake, recv result, block_trap send error, close wakeup, and SSL handshake/read/write; timings are intentionally excluded";
 const RUST_SCHEDULER_UNCHANGED_LEGACY_SUBSET: &[&str] = &[
     "test_scheduler.TestCAPIExposure.test_has_capi_attribute",
@@ -279,6 +283,7 @@ fn main() -> Result<()> {
         "rust-resources" => rust_resources(),
         "bench" => bench_tier_local(),
         "bench-scheduler-comparison" => bench_scheduler_comparison(args.collect()),
+        "bench-scheduler-architecture" => bench_scheduler_architecture(args.collect()),
         "bench-scalability" => bench_scalability(args.collect()),
         "bench-scalability-worker" => bench_scalability_worker(args.collect()),
         "bench-scheduler-core" => bench_scheduler_core(args.collect()),
@@ -1946,6 +1951,7 @@ fn report_readiness() -> Result<()> {
     let rust_resources_status = readiness_line("rust-resources.json");
     let bench_status = readiness_line("bench-tier-local.json");
     let scheduler_comparison_status = readiness_line("scheduler-comparison.json");
+    let scheduler_architecture_status = readiness_line("scheduler-architecture.json");
     println!("Report readiness");
     println!("  scheduler fixtures: {scheduler_fixture_status}");
     println!("  legacy scheduler: {legacy_scheduler_status}");
@@ -1955,22 +1961,26 @@ fn report_readiness() -> Result<()> {
     println!("  rust resources: {rust_resources_status}");
     println!("  Tier 1 benchmarks: {bench_status}");
     println!("  Scheduler comparison: {scheduler_comparison_status}");
+    println!("  Scheduler architecture: {scheduler_architecture_status}");
     Ok(())
 }
 
 fn rust_scheduler_python() -> Result<()> {
-    let command = "cargo test -p carbon-scheduler-python --lib -- --test-threads=1; cargo build -p carbon-scheduler-python; PYTHONPATH=target/carbon/python python3 -c <flavor import smoke>; PYTHONPATH=target/carbon/python:<legacy tests> python3 -m unittest <full unchanged legacy scheduler Python suite>; compile/run Scheduler.h C++ smoke; compile/run real legacy capiTest/Tasklet.cpp, Channel.cpp, and Scheduler.cpp source slices one test per child process; run optional CARBON_CAPI_GTEST_IN_PROCESS=1 source-slice probe";
+    let command = "cargo test --manifest-path carbon-scheduler-rs/Cargo.toml -p carbon-scheduler-python --lib -- --test-threads=1; cargo build --manifest-path carbon-scheduler-rs/Cargo.toml -p carbon-scheduler-python; PYTHONPATH=target/carbon/python python3 -c <flavor import smoke>; PYTHONPATH=target/carbon/python:<legacy tests> python3 -m unittest <full unchanged legacy scheduler Python suite>; compile/run Scheduler.h C++ smoke; compile/run real legacy capiTest/Tasklet.cpp, Channel.cpp, and Scheduler.cpp source slices one test per child process; run optional CARBON_CAPI_GTEST_IN_PROCESS=1 source-slice probe";
     let started = Instant::now();
     let cargo = env::var("CARGO").unwrap_or_else(|_| String::from("cargo"));
     let test_output = Command::new(&cargo)
         .args([
             "test",
+            "--manifest-path",
+            SCHEDULER_RS_MANIFEST,
             "-p",
             "carbon-scheduler-python",
             "--lib",
             "--",
             "--test-threads=1",
         ])
+        .env("CARGO_TARGET_DIR", FENRIS_CARGO_TARGET_DIR)
         .output()
         .context("running Rust scheduler Python bridge smoke tests")?;
 
@@ -1989,7 +1999,14 @@ fn rust_scheduler_python() -> Result<()> {
 
     if test_output.status.success() {
         let output = Command::new(&cargo)
-            .args(["build", "-p", "carbon-scheduler-python"])
+            .args([
+                "build",
+                "--manifest-path",
+                SCHEDULER_RS_MANIFEST,
+                "-p",
+                "carbon-scheduler-python",
+            ])
+            .env("CARGO_TARGET_DIR", FENRIS_CARGO_TARGET_DIR)
             .output()
             .context("building Rust scheduler Python extension")?;
         if output.status.success() {
@@ -2178,15 +2195,15 @@ fn rust_scheduler_python() -> Result<()> {
                 "carbon-scheduler-python now keeps the current owner-thread runnable PyObject registry in thread-local compatibility storage while CoreScheduler remains the ordering authority; the global run-queue registry is limited to foreign-thread handoff",
                 "CoreScheduler now owns scheduler switch-trap depth per owner run queue and the live PyO3 bridge routes switch_trap() plus trapped schedule/run/channel/switch/raise/kill guards through that core state",
                 "live PyO3 tasklet/channel objects now carry opaque CoreTaskletId/CoreChannelId handles, mirror unbuffered channel balance, preference, block-trap, and blocked sender/receiver queue transitions through CoreScheduler, consume CoreChannelOperationResult sender/receiver IDs, core-minted payload handoff tokens, preferred peer-immediate handoff, and balance for covered unbuffered send/receive transfer decisions, use CoreScheduler snapshots for the sender-preferred pre-receive scheduling probe, and use CoreScheduler queue-front results for channel.queue introspection while preserving bridge-local Python payload object storage",
-                "live PyO3 tasklet objects now mirror alive/scheduled/paused/times_switched_to through CoreScheduler tasklet snapshots for setup, run, finish, block, continuation, clear, and kill/exception paths covered by bridge tests; covered bind/remove/insert/switch pause paths use explicit CoreScheduler pause/resume transitions, direct tasklet.run paused eligibility consults the core paused snapshot, and blocked receive/send throw cleanup resolves blocked channel/direction from CoreScheduler snapshots instead of tasklet-local channel pointers",
-                "Python-visible tasklet alive/blocked/scheduled/paused/block_trap/times_switched_to properties, public tasklet call/setup/insert/run/switch invalid-state guards, the current-tasklet block_trap guard used by channel operations, and the C API times_switched_to/block_trap getters now read CoreScheduler snapshots, including the legacy transient current-tasklet scheduled flag during scheduler.schedule(); insert avoids resyncing stale bridge lifecycle fields when the core already owns the scheduled state",
+                "live PyO3 tasklet objects now mirror alive/scheduled/paused/times_switched_to through CoreScheduler tasklet snapshots for setup, run, finish, block, continuation, clear, and kill/exception paths covered by bridge tests; covered blocked send/receive tasklet state projection, live channel-continuation scheduled/paused projection, current-tasklet channel handoff requeue projection, and schedule_remove pause projection apply CoreScheduler snapshots instead of hand-writing local lifecycle flags, covered bind/remove/insert/switch pause paths use explicit CoreScheduler pause/resume transitions, direct tasklet.run paused eligibility consults the core paused snapshot, and blocked receive/send throw cleanup resolves blocked channel/direction from CoreScheduler snapshots instead of tasklet-local channel pointers",
+                "Python-visible tasklet alive/blocked/scheduled/paused/block_trap/times_switched_to properties, public tasklet call/setup/insert/run/switch/bind/unbind/dont_raise invalid-state guards, the current-tasklet block_trap guard used by channel operations, and the C API times_switched_to/block_trap getters now read CoreScheduler snapshots, including the legacy transient current-tasklet scheduled flag during scheduler.schedule(); insert avoids resyncing stale bridge lifecycle fields when the core already owns the scheduled state",
                 "Python-visible channel preference/closing/closed properties now read CoreScheduler snapshots, while core-owned payload tokens select bridge-local Python payload objects for send/receive, exception replay, and blocked-sender cleanup paths",
                 "FFI crate owns ABI status/version and panic-containment bootstrap"
             ],
             "still_bridge_owned": [
-                "Python tasklet object still stores callable/args/kwargs, Greenlet continuation state, pending exceptions, kill/continuation flags, compatibility metrics, and PyObject identity registries needed for callable execution; CoreScheduler snapshots are not yet authoritative for every lifecycle transition beyond the covered public call/setup/insert/run/switch guards",
+                "Python tasklet object still stores callable/args/kwargs, Greenlet continuation state, pending exceptions, kill/continuation flags, compatibility metrics, and PyObject identity registries needed for callable execution; CoreScheduler snapshots are not yet authoritative for every lifecycle transition beyond covered blocked send/receive projection, live channel-continuation projection, current-tasklet channel handoff requeue projection, schedule_remove pause projection, and public call/setup/insert/run/switch/bind/unbind/dont_raise guards",
                 "Python channel object still stores live Python payload/exception objects, pending message close-state details, and PyObject registries for legacy identity adaptation even though covered unbuffered transfer selection, payload-token handoff/removal identity, immediate peer handoff, queue-front selection, and scheduler run-queue order now come from CoreScheduler results",
-                "Python schedule/channel callbacks and refcount/GC/weakref cleanup remain bridge-local"
+                "Python schedule/channel callbacks and broader refcount/GC/weakref cleanup remain bridge-local; schedule-manager wrapper refcount/weakref/thread-cache teardown and selected tasklet/channel refcount smokes are covered by targeted bridge tests"
             ],
             "migration_blocker": "make CoreScheduler tasklet/channel snapshots authoritative for remaining lifecycle decisions and queue identity adapters while leaving PyO3 as a compatibility wrapper for Python callables, exceptions, and PyObject payload storage"
         },
@@ -2287,7 +2304,7 @@ fn rust_scheduler_python() -> Result<()> {
             "legacy capiTest/Tasklet.cpp source compiles against the Rust extension with a local GoogleTest-compatible shim and passes its tasklet constructor, setup/run, setup refcount, insert, check, block_trap, main-tasklet, alive, and kill C API tests",
             "legacy capiTest/Channel.cpp source compiles against the Rust extension with a local GoogleTest-compatible shim and passes its channel constructor/check, send/receive, killed-tasklet cleanup, send_exception, queue head, preference, balance, and send_throw C API tests",
             "legacy capiTest/Scheduler.cpp source compiles against the Rust extension with a local GoogleTest-compatible shim and passes its schedule/run-count/current/run-n/timeout, channel callback, schedule callback, fast callback, active manager/channel/tasklet counter, and last-timeout counter C API tests",
-            "maturin wheel builds from crates/carbon-scheduler-python, installs into a fresh virtualenv, and imports installed _scheduler plus installed legacy scheduler package with QueueChannel and _C_API smoke coverage",
+            "maturin wheel builds from carbon-scheduler-rs/crates/carbon-scheduler-python, installs into a fresh virtualenv, and imports installed _scheduler plus installed legacy scheduler package with QueueChannel and _C_API smoke coverage",
             "tasklet switch pending kill and current-tasklet TaskletExit smoke behavior is covered",
             "scheduler ABI version exposed through Python",
             "channel constructor shape accepts QueueChannel-style super().__init__(self)",
@@ -2410,7 +2427,13 @@ fn io_workloads() -> Result<()> {
     } else {
         "debug"
     };
-    let mut build_args = vec!["build", "-p", "carbon-scheduler-python"];
+    let mut build_args = vec![
+        "build",
+        "--manifest-path",
+        SCHEDULER_RS_MANIFEST,
+        "-p",
+        "carbon-scheduler-python",
+    ];
     if scheduler_python_build_profile == "release-native" {
         build_args.extend(["--profile", "release-native"]);
     }
@@ -2420,6 +2443,7 @@ fn io_workloads() -> Result<()> {
     );
     let build_output = Command::new(&cargo)
         .args(&build_args)
+        .env("CARGO_TARGET_DIR", FENRIS_CARGO_TARGET_DIR)
         .output()
         .context("building Rust scheduler Python extension for IO workloads")?;
 
@@ -2512,7 +2536,7 @@ fn io_workloads() -> Result<()> {
         failures.push(json!({
             "kind": "build",
             "implementation": "rust_scheduler_python_bridge",
-            "error": "cargo build -p carbon-scheduler-python failed"
+            "error": "cargo build --manifest-path carbon-scheduler-rs/Cargo.toml -p carbon-scheduler-python failed"
         }));
     }
 
@@ -3898,6 +3922,13 @@ struct ScalabilityConfig {
 }
 
 #[derive(Clone, Debug)]
+struct SchedulerArchitectureConfig {
+    tier: ScalabilityTier,
+    samples: u64,
+    output: PathBuf,
+}
+
+#[derive(Clone, Debug)]
 struct SchedulerComparisonConfig {
     tier: ScalabilityTier,
     workload_set: SchedulerComparisonWorkloadSet,
@@ -4094,15 +4125,15 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
             ) {
                 (Ok(legacy), Ok(rust)) => {
                     let row = scheduler_comparison_row(&spec, &legacy, &rust);
-                    let semantic_mismatch_count = row
-                        .pointer("/semantic/mismatch_count")
+                    let reconciliation_mismatch_count = row
+                        .pointer("/reconciliation/mismatch_count")
                         .and_then(Value::as_u64)
                         .unwrap_or(1);
-                    if semantic_mismatch_count != 0 {
+                    if reconciliation_mismatch_count != 0 {
                         blockers.push(readiness_blocker(
-                            "scheduler_comparison_semantic_mismatch",
-                            format!("{} semantic checksum mismatch", spec.workload),
-                            "fix the benchmark workload or scheduler parity mismatch before publishing this comparison",
+                            "scheduler_comparison_reconciliation_mismatch",
+                            format!("{} performance reconciliation mismatch", spec.workload),
+                            "fix the benchmark workload, count mismatch, or scheduler parity mismatch before publishing this comparison",
                         ));
                         rejected_comparisons.push(row);
                     } else {
@@ -4145,9 +4176,9 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
     }
     if !rejected_comparisons.is_empty() {
         failures.push(json!({
-            "stage": "semantic_checksum_validation",
+            "stage": "performance_reconciliation_validation",
             "rejected_rows": rejected_comparisons.len(),
-            "error": "scheduler comparison rows with semantic checksum mismatches are rejected from the comparable row set"
+            "error": "scheduler comparison rows with workload/count/checksum reconciliation mismatches are rejected from the comparable row set"
         }));
     }
 
@@ -4180,7 +4211,7 @@ fn bench_scheduler_comparison(args: Vec<String>) -> Result<()> {
             config.tier.as_str(),
             config.samples
         ),
-        "recommended_blog_command": "scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set all --tier quick --samples 10",
+        "recommended_report_command": "scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set all --tier quick --samples 10",
         "duration_ms": started.elapsed().as_millis() as u64,
         "host": {
             "os": env::consts::OS,
@@ -4301,6 +4332,62 @@ fn parse_bench_scheduler_comparison_args(args: Vec<String>) -> Result<SchedulerC
     })
 }
 
+fn parse_bench_scheduler_architecture_args(
+    args: Vec<String>,
+) -> Result<SchedulerArchitectureConfig> {
+    let mut tier = ScalabilityTier::Quick;
+    let mut samples = None;
+    let mut output = evidence_path("scheduler-architecture.json");
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--tier" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    bail!("--tier requires quick or full");
+                };
+                tier = ScalabilityTier::parse(value)?;
+            }
+            "--samples" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    bail!("--samples requires a positive integer");
+                };
+                let parsed = value
+                    .parse::<u64>()
+                    .with_context(|| format!("parsing --samples value {value}"))?;
+                if parsed == 0 {
+                    bail!("--samples must be greater than zero");
+                }
+                samples = Some(parsed.min(50));
+            }
+            "--output" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    bail!("--output requires a path");
+                };
+                output = PathBuf::from(value);
+            }
+            other => bail!("unknown bench-scheduler-architecture option: {other}"),
+        }
+        index += 1;
+    }
+
+    Ok(SchedulerArchitectureConfig {
+        tier,
+        samples: samples.unwrap_or_else(|| default_scheduler_architecture_samples(tier)),
+        output,
+    })
+}
+
+fn default_scheduler_architecture_samples(tier: ScalabilityTier) -> u64 {
+    match tier {
+        ScalabilityTier::Quick => 5,
+        ScalabilityTier::Full => 10,
+    }
+}
+
 fn scheduler_comparison_specs(
     tier: ScalabilityTier,
     workload_set: SchedulerComparisonWorkloadSet,
@@ -4406,6 +4493,8 @@ fn build_scheduler_python_package_for_profile(build_profile: &str) -> Result<()>
     let cargo = env::var("CARGO").unwrap_or_else(|_| String::from("cargo"));
     let mut args = vec![
         String::from("build"),
+        String::from("--manifest-path"),
+        String::from(SCHEDULER_RS_MANIFEST),
         String::from("-p"),
         String::from("carbon-scheduler-python"),
     ];
@@ -4419,6 +4508,7 @@ fn build_scheduler_python_package_for_profile(build_profile: &str) -> Result<()>
     }
     let output = Command::new(&cargo)
         .args(&args)
+        .env("CARGO_TARGET_DIR", FENRIS_CARGO_TARGET_DIR)
         .output()
         .with_context(|| format!("building carbon-scheduler-python for profile {build_profile}"))?;
     if !output.status.success() {
@@ -4506,11 +4596,37 @@ fn scheduler_comparison_row(
     let rust_latency_samples = scheduler_side_latency_samples(rust);
     let legacy_checksums = scheduler_side_checksums(legacy);
     let rust_checksums = scheduler_side_checksums(rust);
-    let mismatch_count = if legacy_checksums.len() == 1 && legacy_checksums == rust_checksums {
-        0_u64
-    } else {
-        1_u64
-    };
+    let semantic_mismatch_count =
+        if legacy_checksums.len() == 1 && legacy_checksums == rust_checksums {
+            0_u64
+        } else {
+            1_u64
+        };
+    let mut expected_run_spec = spec.spec.clone();
+    if let Some(object) = expected_run_spec.as_object_mut() {
+        object.insert(String::from("name"), json!(spec.workload));
+    }
+    let expected_workload = expected_run_spec.get("workload").and_then(Value::as_str);
+    let legacy_workload_spec_match = legacy.runs.iter().all(|run| {
+        run.get("spec") == Some(&expected_run_spec)
+            && run.get("workload").and_then(Value::as_str) == expected_workload
+    });
+    let rust_workload_spec_match = rust.runs.iter().all(|run| {
+        run.get("spec") == Some(&expected_run_spec)
+            && run.get("workload").and_then(Value::as_str) == expected_workload
+    });
+    let workload_spec_match = legacy_workload_spec_match && rust_workload_spec_match;
+    let sample_count_match = legacy.runs.len() == rust.runs.len();
+    let operation_count_match = legacy_operation_count == rust_operation_count;
+    let message_count_match = legacy_message_count == rust_message_count;
+    let data_bytes_match = legacy_data_bytes == rust_data_bytes;
+    let semantic_checksum_match = semantic_mismatch_count == 0;
+    let reconciliation_mismatch_count = u64::from(!workload_spec_match)
+        + u64::from(!sample_count_match)
+        + u64::from(!operation_count_match)
+        + u64::from(!message_count_match)
+        + u64::from(!data_bytes_match)
+        + u64::from(!semantic_checksum_match);
     let legacy_p99 =
         sample_stats_value_u64(&sample_stats_us_extended(&legacy_latency_samples), "p99");
     let rust_p99 = sample_stats_value_u64(&sample_stats_us_extended(&rust_latency_samples), "p99");
@@ -4543,7 +4659,7 @@ fn scheduler_comparison_row(
         "implementation": "legacy_cpp_scheduler_vs_rust_scheduler_python_bridge",
         "comparison_group": spec.workload,
         "comparability": "comparable_scheduler_python_api_process_to_process",
-        "parity_status": if mismatch_count == 0 { "pass" } else { "fail" },
+        "parity_status": if reconciliation_mismatch_count == 0 { "pass" } else { "fail" },
         "claim_scope": "lab scheduler orchestration comparison; real game environment validation remains required before production claims",
         "pressure": scheduler_comparison_pressure(&spec.spec),
         "sample_count": legacy.runs.len().min(rust.runs.len()),
@@ -4594,9 +4710,38 @@ fn scheduler_comparison_row(
             )
         },
         "semantic": {
-            "legacy_checksums": legacy_checksums,
-            "rust_checksums": rust_checksums,
-            "mismatch_count": mismatch_count
+            "legacy_checksums": legacy_checksums.clone(),
+            "rust_checksums": rust_checksums.clone(),
+            "mismatch_count": semantic_mismatch_count
+        },
+        "reconciliation": {
+            "status": if reconciliation_mismatch_count == 0 { "pass" } else { "fail" },
+            "method": "same workload spec plus matched counts and semantic checksum",
+            "mismatch_count": reconciliation_mismatch_count,
+            "checks": {
+                "workload_spec_match": workload_spec_match,
+                "legacy_workload_spec_match": legacy_workload_spec_match,
+                "rust_workload_spec_match": rust_workload_spec_match,
+                "sample_count_match": sample_count_match,
+                "operation_count_match": operation_count_match,
+                "message_count_match": message_count_match,
+                "data_bytes_processed_match": data_bytes_match,
+                "semantic_checksum_match": semantic_checksum_match
+            },
+            "legacy": {
+                "sample_count": legacy.runs.len(),
+                "operation_count": legacy_operation_count,
+                "message_count": legacy_message_count,
+                "data_bytes_processed": legacy_data_bytes,
+                "semantic_checksums": legacy_checksums
+            },
+            "rust": {
+                "sample_count": rust.runs.len(),
+                "operation_count": rust_operation_count,
+                "message_count": rust_message_count,
+                "data_bytes_processed": rust_data_bytes,
+                "semantic_checksums": rust_checksums
+            }
         },
         "legacy_runs": legacy.runs,
         "rust_runs": rust.runs
@@ -4731,6 +4876,14 @@ fn scheduler_comparison_summary(comparisons: &[Value]) -> Value {
         "semantic_mismatch_rows": comparisons
             .iter()
             .filter(|row| row.pointer("/semantic/mismatch_count").and_then(Value::as_u64).unwrap_or(1) != 0)
+            .count(),
+        "reconciliation_mismatch_rows": comparisons
+            .iter()
+            .filter(|row| row.pointer("/reconciliation/mismatch_count").and_then(Value::as_u64).unwrap_or(1) != 0)
+            .count(),
+        "reconciled_comparison_count": comparisons
+            .iter()
+            .filter(|row| row.pointer("/reconciliation/status").and_then(Value::as_str) == Some("pass"))
             .count()
     })
 }
@@ -4985,6 +5138,200 @@ if __name__ == "__main__":
 "#
 }
 
+fn bench_scheduler_architecture(args: Vec<String>) -> Result<()> {
+    if args
+        .iter()
+        .any(|arg| arg.as_str() == "--help" || arg.as_str() == "-h")
+    {
+        println!(
+            "usage: xtask bench-scheduler-architecture [--tier quick|full] [--samples N] [--output path]"
+        );
+        return Ok(());
+    }
+
+    let started = Instant::now();
+    let config = parse_bench_scheduler_architecture_args(args)?;
+    let rust_build = rust_build_metadata();
+    let build_profile = inferred_xtask_build_profile();
+    let target_cpu_native = rust_build
+        .get("target_cpu_native")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let debug_assertions = rust_build
+        .get("debug_assertions")
+        .and_then(Value::as_bool)
+        .unwrap_or(cfg!(debug_assertions));
+    let current_exe = env::current_exe().context("resolving current xtask executable")?;
+
+    let mut native_rows = Vec::<Value>::new();
+    let mut failures = Vec::<Value>::new();
+    let mut blockers = Vec::<Value>::new();
+    for spec in scalability_native_scheduler_specs(config.tier) {
+        match run_scalability_xtask_worker_samples(&current_exe, &spec, config.samples) {
+            Ok(row) => native_rows.push(row),
+            Err(error) => failures.push(json!({
+                "family": "native-scheduler",
+                "workload": spec.workload,
+                "error": error.to_string()
+            })),
+        }
+    }
+
+    let scheduler_comparison_evidence = match read_evidence("scheduler-comparison.json") {
+        Ok(value) => Some(value),
+        Err(error) => {
+            blockers.push(readiness_blocker(
+                "scheduler_comparison_evidence_missing",
+                format!("matched scheduler comparison evidence is missing: {error}"),
+                "run scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set all --tier quick --samples 10 before the architecture benchmark",
+            ));
+            None
+        }
+    };
+    let architecture_comparisons =
+        scheduler_architecture_comparisons(&native_rows, scheduler_comparison_evidence.as_ref());
+    let comparable_native_row_count = native_rows
+        .iter()
+        .filter(|row| native_scheduler_architecture_key(row).is_some())
+        .count();
+    if comparable_native_row_count > 0 && architecture_comparisons.is_empty() {
+        blockers.push(readiness_blocker(
+            "scheduler_architecture_no_joined_rows",
+            "native scheduler rows were sampled but none joined to same-pressure bridge rows",
+            "rerun bench-scheduler-comparison with the pressure workload set, then rerun bench-scheduler-architecture",
+        ));
+    }
+    if build_profile != "release-native" || !target_cpu_native || debug_assertions {
+        blockers.push(readiness_blocker(
+            "scheduler_architecture_not_release_native",
+            format!(
+                "architecture benchmark build_profile={build_profile}, target_cpu_native={target_cpu_native}, debug_assertions={debug_assertions}"
+            ),
+            "rerun scripts/carbon-native-bench.sh bench-scheduler-architecture --tier quick --samples 5",
+        ));
+    }
+    if !failures.is_empty() {
+        blockers.push(readiness_blocker(
+            "scheduler_architecture_runner_failures",
+            "native scheduler architecture benchmark recorded workload failures",
+            "inspect scheduler-architecture.json failures and fix the failing native worker",
+        ));
+    }
+
+    let status = if failures.is_empty() && !architecture_comparisons.is_empty() {
+        "pass"
+    } else {
+        "fail"
+    };
+    let mut remaining_before_report_ready = blocker_remediations(&blockers);
+    for item in [
+        "run a real game-environment scheduler workload before using this as production scheduler evidence",
+        "add memory-per-tasklet/channel and overload/cross-domain thresholds before making capacity claims",
+        "keep these target-architecture rows separate from same-Python-API legacy parity rows",
+    ] {
+        if !remaining_before_report_ready
+            .iter()
+            .any(|existing| existing == item)
+        {
+            remaining_before_report_ready.push(item.to_string());
+        }
+    }
+
+    let evidence = json!({
+        "schema": "carbon.evidence.scheduler_architecture.v1",
+        "gate": "bench-scheduler-architecture",
+        "component": "scheduler",
+        "status": status,
+        "report_ready": false,
+        "tier": config.tier.as_str(),
+        "samples_per_row": config.samples,
+        "build_profile": build_profile,
+        "target_cpu_native": target_cpu_native,
+        "debug_assertions": debug_assertions,
+        "coverage": "target_architecture_no_python_core_scheduler_and_rust_owned_tasklet_workload_comparison",
+        "comparability": "rust_bridge_vs_native_no_python_same_pressure_shape_architecture_probe",
+        "claim_eligibility": "architecture_evidence_only_no_legacy_speedup_claim",
+        "claim_scope": "Compares the Rust scheduler Python bridge with same-pressure native CoreScheduler hot-path rows that remove Python, Greenlet, PyO3, and refcount work. This estimates the upside of pushing scheduler execution into Rust; it is not a same-API legacy comparison or production game-environment claim.",
+        "command": format!(
+            "cargo run -p xtask -- bench-scheduler-architecture --tier {} --samples {}",
+            config.tier.as_str(),
+            config.samples
+        ),
+        "recommended_report_command": "scripts/carbon-native-bench.sh bench-scheduler-architecture --tier quick --samples 5",
+        "duration_ms": started.elapsed().as_millis() as u64,
+        "host": {
+            "os": env::consts::OS,
+            "arch": env::consts::ARCH,
+            "cpu_model": host_cpu_model().unwrap_or_else(|| String::from("unknown")),
+            "logical_cpus": std::thread::available_parallelism().map(|value| value.get()).unwrap_or_default(),
+            "ram_kb": host_mem_total_kb(),
+            "rustc": command_stdout("rustc", &["--version"]).unwrap_or_else(|_| String::from("unknown")),
+            "cargo": command_stdout("cargo", &["--version"]).unwrap_or_else(|_| String::from("unknown")),
+            "rust_build": rust_build,
+            "process_resource_measurement": if Path::new("/usr/bin/time").exists() { "external_time_v" } else { "wall_clock_only" },
+        },
+        "test_definition": {
+            "what_is_tested": "tasklet scheduling, channel rendezvous, fanout tasklet pipelines, and synthetic zone-tick orchestration as scheduler work, not file-copy throughput",
+            "bridge_lane": "Rust scheduler compatibility bridge through the same Python tasklet/channel API, measured in scheduler-comparison.json",
+            "native_lane": "Rust CoreScheduler called directly with Rust-owned tasklets, channels, run queues, domain-style wakeups, fanout workers, and zone-tick work units",
+            "architecture_change": "remove Python objects, Python tasklet bodies, Greenlets, PyO3 object access, Python refcounting, and compatibility callback paths from the scheduler hot loop",
+            "why_this_exists": "the migration target is not merely a Rust implementation hidden behind Python; it is a scheduler architecture where tasklet dispatch, wakeups, channel matching, and selected tasklet work can be owned by Rust in the hot path",
+            "not_claiming": [
+                "not a same-API legacy scheduler speedup claim",
+                "not a real game-environment workload",
+                "not evidence that SIMD is useful for runnable FIFO or channel control flow"
+            ]
+        },
+        "bridge_source_evidence": {
+            "file": "scheduler-comparison.json",
+            "status": scheduler_comparison_evidence
+                .as_ref()
+                .and_then(|value| value.get("status").and_then(Value::as_str)),
+            "comparison_count": scheduler_comparison_evidence
+                .as_ref()
+                .and_then(|value| value.get("comparisons").and_then(Value::as_array))
+                .map(Vec::len)
+                .unwrap_or_default()
+        },
+        "native_summary": scalability_summary(&native_rows),
+        "summary": scheduler_architecture_comparison_summary(&architecture_comparisons),
+        "native_row_count": native_rows.len(),
+        "comparable_native_row_count": comparable_native_row_count,
+        "comparison_count": architecture_comparisons.len(),
+        "rows": native_rows,
+        "native_rows": native_rows,
+        "comparisons": architecture_comparisons,
+        "architecture_comparisons": architecture_comparisons,
+        "failures": failures,
+        "blockers": blockers,
+        "remaining_before_report_ready": remaining_before_report_ready
+    });
+    write_json(&config.output, &evidence)?;
+    println!(
+        "bench-scheduler-architecture: {status} ({} native rows, {} bridge-vs-native comparisons, tier {}, samples {}); evidence {}",
+        evidence
+            .get("native_row_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        evidence
+            .get("comparison_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        config.tier.as_str(),
+        config.samples,
+        config.output.display()
+    );
+
+    if status == "pass" {
+        Ok(())
+    } else {
+        bail!(
+            "bench-scheduler-architecture failed; see {}",
+            config.output.display()
+        )
+    }
+}
+
 fn bench_scalability(args: Vec<String>) -> Result<()> {
     if args
         .iter()
@@ -5067,6 +5414,11 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
         }
     }
 
+    let scheduler_comparison_evidence = read_evidence("scheduler-comparison.json").ok();
+    let architecture_comparisons =
+        scheduler_architecture_comparisons(&rows, scheduler_comparison_evidence.as_ref());
+    let architecture_comparison_summary =
+        scheduler_architecture_comparison_summary(&architecture_comparisons);
     let status = if failures.is_empty() { "pass" } else { "fail" };
     let native_columnar_rows = rows
         .iter()
@@ -5075,6 +5427,13 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
                 row.get("serialization_format").and_then(Value::as_str),
                 Some("arrow_ipc" | "parquet_zstd")
             )
+        })
+        .count();
+    let catalog_interchange_rows = rows
+        .iter()
+        .filter(|row| {
+            row.get("comparability").and_then(Value::as_str)
+                == Some("comparable_end_to_end_catalog_interchange_same_logical_records")
         })
         .count();
     let native_scheduler_rows = rows
@@ -5087,7 +5446,7 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
     let mut remaining_before_report_ready = vec![
         String::from("add comparable legacy scheduler process pressure rows before claiming scheduler speedups"),
         String::from("add captured legacy Carbon IO rows before claiming Carbon IO speedups"),
-        String::from("decide CI thresholds separately from this blog-oriented local evidence snapshot"),
+        String::from("decide CI thresholds separately from this report-oriented local evidence snapshot"),
     ];
     if native_columnar_rows == 0 {
         remaining_before_report_ready.insert(
@@ -5126,7 +5485,7 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             config.families.iter().cloned().collect::<Vec<_>>().join(","),
             config.samples
         ),
-        "recommended_blog_command": "scripts/carbon-native-bench.sh bench-scalability --tier quick --families scheduler,native-scheduler,io,data --samples 5",
+        "recommended_report_command": "scripts/carbon-native-bench.sh bench-scalability --tier quick --families scheduler,native-scheduler,io,data --samples 5",
         "duration_ms": started.elapsed().as_millis() as u64,
         "host": {
             "os": env::consts::OS,
@@ -5149,22 +5508,33 @@ fn bench_scalability(args: Vec<String>) -> Result<()> {
             "status": if native_columnar_rows > 0 { "native_resource_catalog_rows_sampled" } else { "native_resource_catalog_backend_available_not_sampled" },
             "native_columnar_row_count": native_columnar_rows,
             "formats": ["arrow_ipc", "parquet_zstd"],
-            "reason": "ResourceCatalog now has a concrete Arrow record-batch backend with Arrow IPC and Parquet/Zstd round-trips. These rows measure native Rust data-format pressure only; they are not legacy C++ speedup claims."
+            "reason": "ResourceCatalog now has a concrete Arrow record-batch backend with Arrow IPC and Parquet/Zstd round-trips. Standalone round-trip rows measure native Rust data-format pressure; matched interchange rows compare the legacy-style YAML/gzip path and native columnar path for the same logical records."
+        },
+        "catalog_interchange_scope": {
+            "status": if catalog_interchange_rows > 0 { "matched_catalog_interchange_rows_sampled" } else { "matched_catalog_interchange_rows_not_sampled" },
+            "row_count": catalog_interchange_rows,
+            "comparability": "comparable_end_to_end_catalog_interchange_same_logical_records",
+            "legacy_path": "legacy YAML ResourceGroup export, gzip-compress, in-memory byte-copy transmit, gzip-decompress, parse to ResourceCatalog",
+            "native_path": "Arrow IPC or Parquet/Zstd write, in-memory byte-copy transmit, read to ResourceCatalog",
+            "reason": "These rows are the fair end-to-end logical resource catalog interchange comparison for the same generated ResourceCatalog records."
         },
         "native_scheduler_scope": {
             "status": if native_scheduler_rows > 0 { "native_no_python_scheduler_rows_sampled" } else { "native_no_python_scheduler_rows_not_sampled" },
             "row_count": native_scheduler_rows,
-            "reason": "Native scheduler rows exercise CoreScheduler directly with Rust-owned tasklets, channels, run queues, and domain-style wakeups. They intentionally remove Python, Greenlet, PyO3, and refcount work from the hot path, so they are target-architecture probes rather than same-API legacy comparisons."
+            "architecture_comparison_count": architecture_comparisons.len(),
+            "reason": "Native scheduler rows exercise CoreScheduler directly with Rust-owned tasklets, channels, run queues, domain-style wakeups, fanout workers, and synthetic zone-tick work units. They intentionally remove Python tasklet bodies, Greenlet, PyO3, and refcount work from the hot path, so they are target-architecture probes rather than same-API legacy comparisons."
         },
+        "architecture_comparison_summary": architecture_comparison_summary,
+        "architecture_comparisons": architecture_comparisons,
         "summary": scalability_summary(&rows),
         "rows": rows,
         "failures": failures,
         "covered_behaviors": [
             "scheduler runnable tasklet pressure using generated CoreScheduler semantic scenarios",
             "scheduler blocked receiver wake pressure using generated channel-pair scenarios",
-            "native no-Python CoreScheduler kernel pressure for runnable drain, channel rendezvous, and domain-style wakeups",
+            "native no-Python CoreScheduler kernel pressure for runnable drain, channel rendezvous, domain-style wakeups, Rust-owned fanout tasklet pipelines, and Rust-owned zone-tick work units",
             "loopback TCP and TLS payload/concurrency pressure with request latency and network MB/sec",
-            "Rust data pipeline pressure for checksum/compression and catalog export/parse rows",
+            "Rust data pipeline pressure for checksum/compression, catalog export/parse rows, native columnar rows, and matched end-to-end catalog interchange rows",
             "process resource metrics for every row when /usr/bin/time -v is available"
         ],
         "remaining_before_report_ready": remaining_before_report_ready
@@ -5343,19 +5713,33 @@ fn scalability_scheduler_specs(tier: ScalabilityTier) -> Vec<ScalabilityWorkerSp
 fn scalability_native_scheduler_specs(tier: ScalabilityTier) -> Vec<ScalabilityWorkerSpec> {
     let cases = match tier {
         ScalabilityTier::Quick => vec![
+            ("native-runnable-drain", 128_u64, 400_u64),
             ("native-runnable-drain", 1_024_u64, 200_u64),
             ("native-runnable-drain", 16_384, 20),
+            ("native-channel-rendezvous", 32, 800),
+            ("native-channel-rendezvous", 256, 300),
             ("native-channel-rendezvous", 1_024, 100),
             ("native-domain-wakeups", 4_096, 80),
+            ("native-fanout-pipeline", 256, 5),
+            ("native-zone-tick-study", 4, 20),
         ],
         ScalabilityTier::Full => vec![
-            ("native-runnable-drain", 1_024_u64, 800_u64),
+            ("native-runnable-drain", 128_u64, 1_200_u64),
+            ("native-runnable-drain", 1_024, 800),
+            ("native-runnable-drain", 8_192, 200),
             ("native-runnable-drain", 16_384, 100),
             ("native-runnable-drain", 65_536, 20),
+            ("native-channel-rendezvous", 32, 2_000),
+            ("native-channel-rendezvous", 256, 1_000),
+            ("native-channel-rendezvous", 2_048, 200),
             ("native-channel-rendezvous", 1_024, 500),
             ("native-channel-rendezvous", 16_384, 50),
             ("native-domain-wakeups", 4_096, 400),
             ("native-domain-wakeups", 65_536, 40),
+            ("native-fanout-pipeline", 256, 5),
+            ("native-fanout-pipeline", 4_096, 4),
+            ("native-zone-tick-study", 4, 20),
+            ("native-zone-tick-study", 16, 40),
         ],
     };
 
@@ -5385,6 +5769,10 @@ fn scalability_data_specs(tier: ScalabilityTier) -> Vec<ScalabilityWorkerSpec> {
             ("catalog-arrow-ipc-roundtrip", 10_000, 2),
             ("catalog-parquet-roundtrip", 1_000, 8),
             ("catalog-parquet-roundtrip", 10_000, 2),
+            ("catalog-interchange-arrow-ipc", 1_000, 10),
+            ("catalog-interchange-arrow-ipc", 10_000, 2),
+            ("catalog-interchange-parquet-zstd", 1_000, 8),
+            ("catalog-interchange-parquet-zstd", 10_000, 2),
         ],
         ScalabilityTier::Full => vec![
             ("md5-gzip", 1_048_576_u64, 30_u64),
@@ -5399,6 +5787,12 @@ fn scalability_data_specs(tier: ScalabilityTier) -> Vec<ScalabilityWorkerSpec> {
             ("catalog-parquet-roundtrip", 1_000, 20),
             ("catalog-parquet-roundtrip", 10_000, 6),
             ("catalog-parquet-roundtrip", 50_000, 2),
+            ("catalog-interchange-arrow-ipc", 1_000, 30),
+            ("catalog-interchange-arrow-ipc", 10_000, 8),
+            ("catalog-interchange-arrow-ipc", 50_000, 2),
+            ("catalog-interchange-parquet-zstd", 1_000, 20),
+            ("catalog-interchange-parquet-zstd", 10_000, 6),
+            ("catalog-interchange-parquet-zstd", 50_000, 2),
         ],
     };
 
@@ -5593,6 +5987,8 @@ fn scalability_run_sample(
         "latency_us": row.get("latency_us_extended").cloned()
             .or_else(|| row.get("latency_us").cloned())
             .unwrap_or_else(|| json!({"count": 0})),
+        "latency_ns": row.get("latency_ns_extended").cloned()
+            .unwrap_or_else(|| json!({"count": 0})),
         "primary_throughput_metric": row.get("primary_throughput_metric").cloned().unwrap_or(Value::Null),
         "primary_throughput_per_sec": row
             .get("primary_throughput_metric")
@@ -5613,6 +6009,10 @@ fn aggregate_scalability_run_values(
     let Some(mut row) = run_values.first().cloned() else {
         bail!("no scalability samples were recorded");
     };
+    let is_catalog_interchange_row = row
+        .get("workload")
+        .and_then(Value::as_str)
+        .is_some_and(|workload| workload.starts_with("data_catalog_interchange_"));
     let duration_samples = run_values
         .iter()
         .filter_map(|value| value.get("duration_us").and_then(Value::as_u64))
@@ -5627,6 +6027,16 @@ fn aggregate_scalability_run_values(
                 .unwrap_or_default()
         })
         .collect::<Vec<_>>();
+    let latency_ns_samples = run_values
+        .iter()
+        .flat_map(|value| {
+            value
+                .get("latency_samples_ns")
+                .and_then(Value::as_array)
+                .map(|samples| samples.iter().filter_map(Value::as_u64).collect::<Vec<_>>())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
     let throughput_samples = collect_throughput_samples(&run_values);
     let primary_metric = row
         .get("primary_throughput_metric")
@@ -5635,6 +6045,7 @@ fn aggregate_scalability_run_values(
     let total_operations = sum_u64_key(&run_values, "operation_count");
     let total_events = sum_u64_key(&run_values, "event_count");
     let total_requests = sum_u64_key(&run_values, "request_count");
+    let total_messages = sum_u64_key(&run_values, "message_count");
     let total_network_bytes = sum_u64_key(&run_values, "network_bytes_transferred");
     let total_data_bytes = sum_u64_key(&run_values, "data_bytes_processed");
     let total_rows = sum_u64_key(&run_values, "row_count_processed");
@@ -5666,6 +6077,16 @@ fn aggregate_scalability_run_values(
             String::from("latency_sample_count"),
             json!(latency_samples.len()),
         );
+        if !latency_ns_samples.is_empty() {
+            object.insert(
+                String::from("latency_ns_extended"),
+                sample_stats_ns_extended(&latency_ns_samples),
+            );
+            object.insert(
+                String::from("latency_samples_ns"),
+                json!(bounded_u64_samples(&latency_ns_samples, 20_000)),
+            );
+        }
         object.insert(
             String::from("process_samples"),
             process_metrics_sample_json(&process_metrics),
@@ -5696,6 +6117,12 @@ fn aggregate_scalability_run_values(
                 ),
             );
         }
+        if is_catalog_interchange_row {
+            aggregate_catalog_interchange_fields(object, &run_values);
+        }
+        if total_messages > 0 {
+            object.insert(String::from("message_count"), json!(total_messages));
+        }
         object.insert(
             String::from("aggregate_totals"),
             json!({
@@ -5703,6 +6130,7 @@ fn aggregate_scalability_run_values(
                 "operation_count": total_operations,
                 "event_count": total_events,
                 "request_count": total_requests,
+                "message_count": total_messages,
                 "network_bytes_transferred": total_network_bytes,
                 "data_bytes_processed": total_data_bytes,
                 "row_count_processed": total_rows
@@ -5729,7 +6157,11 @@ fn collect_throughput_samples(run_values: &[Value]) -> BTreeMap<String, Vec<f64>
             continue;
         };
         for (key, value) in object {
-            if key.starts_with("throughput_") && key.ends_with("_per_sec") {
+            if (key.starts_with("throughput_")
+                || key.starts_with("legacy_throughput_")
+                || key.starts_with("rust_throughput_"))
+                && key.ends_with("_per_sec")
+            {
                 if let Some(number) = json_number(value) {
                     samples.entry(key.clone()).or_default().push(number);
                 }
@@ -5746,6 +6178,89 @@ fn throughput_samples_json(samples: &BTreeMap<String, Vec<f64>>) -> Value {
             .map(|(metric, values)| (metric.clone(), json!(values)))
             .collect(),
     )
+}
+
+fn aggregate_catalog_interchange_fields(
+    object: &mut serde_json::Map<String, Value>,
+    run_values: &[Value],
+) {
+    let legacy_duration_samples = collect_u64_value_samples(run_values, "legacy_duration_us");
+    let rust_duration_samples = collect_u64_value_samples(run_values, "rust_duration_us");
+    if !legacy_duration_samples.is_empty() && !rust_duration_samples.is_empty() {
+        let legacy_duration_us = mean_u64_rounded(&legacy_duration_samples);
+        let rust_duration_us = mean_u64_rounded(&rust_duration_samples);
+        object.insert(
+            String::from("legacy_duration_us"),
+            json!(legacy_duration_us),
+        );
+        object.insert(String::from("rust_duration_us"), json!(rust_duration_us));
+        object.insert(
+            String::from("legacy_duration_us_stats"),
+            sample_stats_us_extended(&legacy_duration_samples),
+        );
+        object.insert(
+            String::from("rust_duration_us_stats"),
+            sample_stats_us_extended(&rust_duration_samples),
+        );
+        object.insert(
+            String::from("speedup"),
+            json!(speedup_ratio(legacy_duration_us, rust_duration_us)),
+        );
+        if let Some(row_count_processed) = object.get("row_count_processed").and_then(Value::as_u64)
+        {
+            object.insert(
+                String::from("legacy_throughput_rows_per_sec"),
+                json!(rate_per_second_us(row_count_processed, legacy_duration_us)),
+            );
+            object.insert(
+                String::from("rust_throughput_rows_per_sec"),
+                json!(rate_per_second_us(row_count_processed, rust_duration_us)),
+            );
+        }
+    }
+
+    let legacy_latency_samples = collect_u64_array_samples(run_values, "legacy_latency_samples_us");
+    let rust_latency_samples = collect_u64_array_samples(run_values, "rust_latency_samples_us");
+    if !legacy_latency_samples.is_empty() {
+        object.insert(
+            String::from("legacy_latency_samples_us"),
+            json!(bounded_u64_samples(&legacy_latency_samples, 20_000)),
+        );
+        object.insert(
+            String::from("legacy_latency_us_extended"),
+            sample_stats_us_extended(&legacy_latency_samples),
+        );
+    }
+    if !rust_latency_samples.is_empty() {
+        object.insert(
+            String::from("rust_latency_samples_us"),
+            json!(bounded_u64_samples(&rust_latency_samples, 20_000)),
+        );
+        object.insert(
+            String::from("rust_latency_us_extended"),
+            sample_stats_us_extended(&rust_latency_samples),
+        );
+    }
+}
+
+fn collect_u64_value_samples(values: &[Value], key: &str) -> Vec<u64> {
+    values
+        .iter()
+        .filter_map(|value| value.get(key).and_then(Value::as_u64))
+        .collect()
+}
+
+fn collect_u64_array_samples(values: &[Value], key: &str) -> Vec<u64> {
+    values
+        .iter()
+        .flat_map(|value| {
+            value
+                .get(key)
+                .and_then(Value::as_array)
+                .map(|samples| samples.iter().filter_map(Value::as_u64).collect::<Vec<_>>())
+                .unwrap_or_default()
+        })
+        .collect()
 }
 
 fn sum_u64_key(values: &[Value], key: &str) -> u64 {
@@ -5863,6 +6378,10 @@ fn sample_stats_us_extended(samples: &[u64]) -> Value {
     })
 }
 
+fn sample_stats_ns_extended(samples: &[u64]) -> Value {
+    sample_stats_us_extended(samples)
+}
+
 fn sample_stats_f64_extended(samples: &[f64]) -> Value {
     if samples.is_empty() {
         return json!({
@@ -5938,6 +6457,178 @@ fn scalability_summary(rows: &[Value]) -> Value {
         "highest_peak_rss_kb_p95": highest_peak_rss_kb,
         "highest_cpu_percent_p95": highest_cpu_percent,
         "stable_rows_cv_le_10_percent": stable_rows
+    })
+}
+
+fn scheduler_architecture_comparisons(
+    rows: &[Value],
+    scheduler_comparison_evidence: Option<&Value>,
+) -> Vec<Value> {
+    let Some(scheduler_comparison_evidence) = scheduler_comparison_evidence else {
+        return Vec::new();
+    };
+    let mut bridge_by_workload = BTreeMap::<String, &Value>::new();
+    if let Some(comparisons) = scheduler_comparison_evidence
+        .get("comparisons")
+        .and_then(Value::as_array)
+    {
+        for comparison in comparisons {
+            if comparison.get("comparability").and_then(Value::as_str)
+                != Some("comparable_scheduler_python_api_process_to_process")
+            {
+                continue;
+            }
+            if let Some(workload) = comparison
+                .get("comparison_group")
+                .or_else(|| comparison.get("workload"))
+                .and_then(Value::as_str)
+            {
+                bridge_by_workload.insert(workload.to_string(), comparison);
+            }
+        }
+    }
+
+    rows.iter()
+        .filter(|row| row.get("family").and_then(Value::as_str) == Some("native-scheduler"))
+        .filter_map(|native| {
+            let key = native_scheduler_architecture_key(native)?;
+            let bridge = bridge_by_workload.get(&key)?;
+            Some(scheduler_architecture_comparison_row(&key, bridge, native))
+        })
+        .collect()
+}
+
+fn native_scheduler_architecture_key(row: &Value) -> Option<String> {
+    row.get("architecture_comparison_key")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            let pressure = row.get("pressure")?;
+            match pressure.get("axis").and_then(Value::as_str)? {
+                "tasklet_count" => pressure
+                    .get("tasklet_count")
+                    .and_then(Value::as_u64)
+                    .map(|count| format!("runnable_tasklets_{count}")),
+                "channel_pair_count" => pressure
+                    .get("channel_pair_count")
+                    .and_then(Value::as_u64)
+                    .map(|count| format!("channel_rendezvous_{count}")),
+                _ => None,
+            }
+        })
+}
+
+fn scheduler_architecture_comparison_row(
+    workload_key: &str,
+    bridge: &Value,
+    native: &Value,
+) -> Value {
+    let pressure_axis = native
+        .pointer("/pressure/axis")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let (
+        bridge_comparable_metric,
+        bridge_comparable_value,
+        native_comparable_metric,
+        native_comparable_value,
+    ) = match pressure_axis {
+        "channel_pair_count" => (
+            "rust_bridge_rendezvous_per_sec",
+            number_at(bridge, &["rust_throughput_messages_per_sec"]),
+            "native_rendezvous_per_sec",
+            number_at(native, &["throughput_completed_units_per_sec"]),
+        ),
+        "message_count" => (
+            "rust_bridge_messages_per_sec",
+            number_at(bridge, &["rust_throughput_messages_per_sec"]),
+            "native_messages_per_sec",
+            number_at(native, &["throughput_messages_per_sec"]),
+        ),
+        "zone_tick_count" => (
+            "rust_bridge_zone_tick_operations_per_sec",
+            number_at(bridge, &["rust_throughput_operations_per_sec"]),
+            "native_zone_tick_operations_per_sec",
+            number_at(native, &["throughput_operations_per_sec"]),
+        ),
+        _ => (
+            "rust_bridge_tasklets_per_sec",
+            number_at(bridge, &["rust_throughput_operations_per_sec"]),
+            "native_tasklets_per_sec",
+            number_at(native, &["throughput_completed_units_per_sec"]),
+        ),
+    };
+    let bridge_ops = number_at(bridge, &["rust_throughput_operations_per_sec"]);
+    let native_ops = number_at(native, &["throughput_operations_per_sec"]);
+    let bridge_p99 = number_at(bridge, &["rust_sample_stats_us", "p99"]);
+    let bridge_p99_ns = bridge_p99.map(|value| value * 1_000.0);
+    let native_p99_ns = number_at(native, &["latency_ns_extended", "p99"]);
+    let native_p99 = native_p99_ns
+        .map(|value| value / 1_000.0)
+        .or_else(|| number_at(native, &["latency_us_extended", "p99"]));
+
+    json!({
+        "component": "scheduler",
+        "workload": workload_key,
+        "pressure": native.get("pressure").cloned().unwrap_or(Value::Null),
+        "comparability": "rust_bridge_vs_native_no_python_same_pressure_shape_architecture_probe",
+        "claim_eligibility": "architecture_evidence_only_no_legacy_speedup_claim",
+        "claim_scope": "Compares the Rust scheduler Python bridge with a same-pressure Rust CoreScheduler hot path that removes Python, Greenlet, PyO3, and refcount work. This estimates target-architecture upside; it is not a same-API legacy comparison or production game-environment claim.",
+        "bridge_implementation": bridge.get("rust_implementation").cloned().unwrap_or_else(|| json!("rust_scheduler_python_bridge")),
+        "native_implementation": native.get("implementation").cloned().unwrap_or_else(|| json!("rust_core_scheduler_native_no_python")),
+        "no_python_hot_path": native.get("no_python_hot_path").cloned().unwrap_or_else(|| json!(false)),
+        "architecture_lane": native.get("architecture_lane").cloned().unwrap_or(Value::Null),
+        "bridge_comparable_metric": bridge_comparable_metric,
+        "native_comparable_metric": native_comparable_metric,
+        "bridge_comparable_throughput_per_sec": bridge_comparable_value,
+        "native_comparable_throughput_per_sec": native_comparable_value,
+        "native_over_bridge_comparable_throughput_ratio": optional_ratio_f64(native_comparable_value, bridge_comparable_value),
+        "bridge_throughput_operations_per_sec": bridge_ops,
+        "native_throughput_operations_per_sec": native_ops,
+        "native_over_bridge_operations_throughput_ratio": optional_ratio_f64(native_ops, bridge_ops),
+        "bridge_p99_us": bridge_p99,
+        "native_p99_us": native_p99,
+        "native_p99_ns": native_p99_ns,
+        "bridge_over_native_p99_ratio": optional_ratio_f64(bridge_p99_ns, native_p99_ns),
+        "bridge_cpu_burn_effective_mean_ms": number_at(bridge, &["rust_process_stats", "cpu_burn_effective_ms", "mean"]),
+        "native_cpu_burn_effective_mean_ms": number_at(native, &["process_stats", "cpu_burn_effective_ms", "mean"]),
+        "bridge_over_native_cpu_burn_effective_mean_ratio": optional_ratio_f64(
+            number_at(bridge, &["rust_process_stats", "cpu_burn_effective_ms", "mean"]),
+            number_at(native, &["process_stats", "cpu_burn_effective_ms", "mean"]),
+        ),
+        "bridge_peak_rss_p95_kb": number_at(bridge, &["rust_process_stats", "max_rss_kb", "p95"]),
+        "native_peak_rss_p95_kb": number_at(native, &["process_stats", "max_rss_kb", "p95"]),
+        "bridge_over_native_peak_rss_p95_ratio": optional_ratio_f64(
+            number_at(bridge, &["rust_process_stats", "max_rss_kb", "p95"]),
+            number_at(native, &["process_stats", "max_rss_kb", "p95"]),
+        ),
+        "bridge_row": bridge.get("workload").cloned().unwrap_or_else(|| json!(workload_key)),
+        "native_row": native.get("workload").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn scheduler_architecture_comparison_summary(comparisons: &[Value]) -> Value {
+    let comparable_ratios = comparisons
+        .iter()
+        .filter_map(|row| {
+            row.get("native_over_bridge_comparable_throughput_ratio")
+                .and_then(json_number)
+        })
+        .collect::<Vec<_>>();
+    let p99_ratios = comparisons
+        .iter()
+        .filter_map(|row| {
+            row.get("bridge_over_native_p99_ratio")
+                .and_then(json_number)
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "row_count": comparisons.len(),
+        "geomean_native_over_bridge_comparable_throughput_ratio": geomean_f64(&comparable_ratios),
+        "best_native_over_bridge_comparable_throughput_ratio": comparable_ratios.iter().copied().reduce(f64::max),
+        "worst_native_over_bridge_comparable_throughput_ratio": comparable_ratios.iter().copied().reduce(f64::min),
+        "geomean_bridge_over_native_p99_ratio": geomean_f64(&p99_ratios),
+        "claim_scope": "Target-architecture comparison only: Rust bridge compatibility path versus native no-Python CoreScheduler hot path for matching pressure shapes."
     })
 }
 
@@ -6026,7 +6717,7 @@ fn bench_scalability_scheduler_worker(args: &[String]) -> Result<Value> {
 
 fn bench_scalability_native_scheduler_worker(args: &[String]) -> Result<Value> {
     if args.len() != 3 {
-        bail!("native scheduler scalability worker requires <native-runnable-drain|native-channel-rendezvous|native-domain-wakeups> <count> <iterations>");
+        bail!("native scheduler scalability worker requires <native-runnable-drain|native-channel-rendezvous|native-domain-wakeups|native-fanout-pipeline|native-zone-tick-study> <count> <iterations>");
     }
     let kind = args[0].as_str();
     let count = parse_positive_u64(&args[1], "native scheduler pressure count")?;
@@ -6035,6 +6726,8 @@ fn bench_scalability_native_scheduler_worker(args: &[String]) -> Result<Value> {
         "native-runnable-drain" => bench_native_scheduler_runnable_drain(count, iterations),
         "native-channel-rendezvous" => bench_native_scheduler_channel_rendezvous(count, iterations),
         "native-domain-wakeups" => bench_native_scheduler_domain_wakeups(count, iterations),
+        "native-fanout-pipeline" => bench_native_scheduler_fanout_pipeline(count, iterations),
+        "native-zone-tick-study" => bench_native_scheduler_zone_tick_study(count, iterations),
         other => bail!("unsupported native scheduler scalability kind: {other}"),
     }
 }
@@ -6048,6 +6741,7 @@ fn bench_native_scheduler_runnable_drain(count: u64, iterations: u64) -> Result<
         .collect::<Vec<_>>();
 
     let mut latency_samples = Vec::with_capacity(iterations as usize);
+    let mut latency_samples_ns = Vec::with_capacity(iterations as usize);
     let mut completed = 0_u64;
     let started = Instant::now();
     for _ in 0..iterations {
@@ -6069,7 +6763,9 @@ fn bench_native_scheduler_runnable_drain(count: u64, iterations: u64) -> Result<
             bail!("native runnable drain popped {popped} tasklets, expected {count}");
         }
         completed = completed.saturating_add(popped);
-        latency_samples.push(sample_started.elapsed().as_micros() as u64);
+        let sample_elapsed = sample_started.elapsed();
+        latency_samples.push(sample_elapsed.as_micros() as u64);
+        latency_samples_ns.push(sample_elapsed.as_nanos() as u64);
     }
     let duration_us = started.elapsed().as_micros() as u64;
     let operation_count = count.saturating_mul(iterations).saturating_mul(2);
@@ -6089,6 +6785,7 @@ fn bench_native_scheduler_runnable_drain(count: u64, iterations: u64) -> Result<
         completed,
         0,
         latency_samples,
+        latency_samples_ns,
         "Rust-owned run queue schedule+drain with no Python, Greenlet, PyO3, trace interpreter, or refcount work in the hot path.",
     ))
 }
@@ -6107,6 +6804,7 @@ fn bench_native_scheduler_channel_rendezvous(pair_count: u64, iterations: u64) -
     }
 
     let mut latency_samples = Vec::with_capacity(iterations as usize);
+    let mut latency_samples_ns = Vec::with_capacity(iterations as usize);
     let mut transfers = 0_u64;
     let started = Instant::now();
     for _ in 0..iterations {
@@ -6121,7 +6819,9 @@ fn bench_native_scheduler_channel_rendezvous(pair_count: u64, iterations: u64) -
             transfers += 1;
             black_box(result);
         }
-        latency_samples.push(sample_started.elapsed().as_micros() as u64);
+        let sample_elapsed = sample_started.elapsed();
+        latency_samples.push(sample_elapsed.as_micros() as u64);
+        latency_samples_ns.push(sample_elapsed.as_nanos() as u64);
     }
     for channel in &channels {
         let snapshot = scheduler
@@ -6153,6 +6853,7 @@ fn bench_native_scheduler_channel_rendezvous(pair_count: u64, iterations: u64) -
         transfers,
         pair_count,
         latency_samples,
+        latency_samples_ns,
         "Rust-owned unbuffered channel receive+send rendezvous with payload-token handoff and no Python payload objects in the hot path.",
     ))
 }
@@ -6173,6 +6874,7 @@ fn bench_native_scheduler_domain_wakeups(wakeup_count: u64, iterations: u64) -> 
         .collect::<Vec<_>>();
 
     let mut latency_samples = Vec::with_capacity(iterations as usize);
+    let mut latency_samples_ns = Vec::with_capacity(iterations as usize);
     let mut drained = 0_u64;
     let started = Instant::now();
     for _ in 0..iterations {
@@ -6197,7 +6899,9 @@ fn bench_native_scheduler_domain_wakeups(wakeup_count: u64, iterations: u64) -> 
             bail!("native domain wakeup drain popped {popped} tasklets, expected {wakeup_count}");
         }
         drained = drained.saturating_add(popped);
-        latency_samples.push(sample_started.elapsed().as_micros() as u64);
+        let sample_elapsed = sample_started.elapsed();
+        latency_samples.push(sample_elapsed.as_micros() as u64);
+        latency_samples_ns.push(sample_elapsed.as_nanos() as u64);
     }
     let duration_us = started.elapsed().as_micros() as u64;
     let operation_count = wakeup_count.saturating_mul(iterations).saturating_mul(2);
@@ -6218,8 +6922,524 @@ fn bench_native_scheduler_domain_wakeups(wakeup_count: u64, iterations: u64) -> 
         drained,
         domain_count as u64,
         latency_samples,
+        latency_samples_ns,
         "Rust-owned domain-style wakeup enqueue+drain across multiple run queues; this models the target architecture without Python/Greenlet scheduling.",
     ))
+}
+
+fn bench_native_scheduler_fanout_pipeline(payload_bytes: u64, iterations: u64) -> Result<Value> {
+    let worker_count = 8_u64;
+    let worker_count_usize = usize::try_from(worker_count).expect("worker count fits usize");
+    let messages_per_iteration = match payload_bytes {
+        4_096 => 256_u64,
+        _ => 512_u64,
+    };
+    let mut scheduler = CoreScheduler::new();
+    let queue = scheduler.create_run_queue();
+    let main = scheduler.create_tasklet();
+    let collector = scheduler.create_tasklet();
+    let output = scheduler.create_channel(0);
+    let inputs = (0..worker_count_usize)
+        .map(|_| scheduler.create_channel(0))
+        .collect::<Vec<_>>();
+    let workers = (0..worker_count_usize)
+        .map(|_| scheduler.create_tasklet())
+        .collect::<Vec<_>>();
+
+    let mut latency_samples = Vec::with_capacity(iterations as usize);
+    let mut latency_samples_ns = Vec::with_capacity(iterations as usize);
+    let mut logical_operations = 0_u64;
+    let mut scheduler_operations = 0_u64;
+    let mut messages = 0_u64;
+    let mut data_bytes = 0_u64;
+    let mut checksum = native_scheduler_checksum_seed("fanout_pipeline");
+    let started = Instant::now();
+
+    for iteration in 0..iterations {
+        let sample_started = Instant::now();
+        let mut worker_counts = vec![0_u64; worker_count_usize];
+        let mut worker_totals = vec![0_u64; worker_count_usize];
+        let mut collected = 0_u64;
+        let mut collected_count_sum = 0_u64;
+        let mut collected_total_sum = 0_u64;
+
+        expect_native_blocked(
+            scheduler
+                .receive(collector, output)
+                .context("blocking native fanout collector")?,
+            "collector output receive",
+        )?;
+        scheduler_operations = scheduler_operations.saturating_add(1);
+        for (worker, input) in workers.iter().zip(inputs.iter()) {
+            expect_native_blocked(
+                scheduler
+                    .receive(*worker, *input)
+                    .context("blocking native fanout worker")?,
+                "worker input receive",
+            )?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+        }
+
+        for message_id in 0..messages_per_iteration {
+            let worker_index =
+                usize::try_from(message_id % worker_count).expect("worker index fits usize");
+            expect_native_matched(
+                scheduler
+                    .send(main, inputs[worker_index])
+                    .context("sending native fanout input")?,
+                "main to worker input send",
+            )?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            scheduler
+                .schedule_tasklet_back(queue, workers[worker_index])
+                .context("scheduling native fanout worker")?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            pop_expected_native_tasklet(
+                &mut scheduler,
+                queue,
+                workers[worker_index],
+                "native fanout worker",
+            )?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+
+            worker_counts[worker_index] = worker_counts[worker_index].saturating_add(1);
+            worker_totals[worker_index] = worker_totals[worker_index]
+                .wrapping_add(message_id)
+                .wrapping_add(payload_bytes)
+                .wrapping_add(worker_index as u64)
+                & 0xFFFF_FFFF;
+            expect_native_blocked(
+                scheduler
+                    .receive(workers[worker_index], inputs[worker_index])
+                    .context("reblocking native fanout worker")?,
+                "worker reblock on input",
+            )?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+        }
+
+        for worker_index in 0..worker_count_usize {
+            expect_native_matched(
+                scheduler
+                    .send(main, inputs[worker_index])
+                    .context("sending native fanout stop")?,
+                "main to worker stop send",
+            )?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            scheduler
+                .schedule_tasklet_back(queue, workers[worker_index])
+                .context("scheduling native fanout worker stop")?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            pop_expected_native_tasklet(
+                &mut scheduler,
+                queue,
+                workers[worker_index],
+                "native fanout worker stop",
+            )?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+
+            expect_native_matched(
+                scheduler
+                    .send(workers[worker_index], output)
+                    .context("sending native fanout worker result")?,
+                "worker result to collector send",
+            )?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            scheduler
+                .update_tasklet_runtime_state(
+                    workers[worker_index],
+                    false,
+                    false,
+                    iteration.saturating_add(1),
+                )
+                .context("completing native fanout worker")?;
+
+            scheduler
+                .schedule_tasklet_back(queue, collector)
+                .context("scheduling native fanout collector")?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            pop_expected_native_tasklet(
+                &mut scheduler,
+                queue,
+                collector,
+                "native fanout collector",
+            )?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            collected = collected.saturating_add(1);
+            collected_count_sum = collected_count_sum.saturating_add(worker_counts[worker_index]);
+            collected_total_sum = collected_total_sum.wrapping_add(worker_totals[worker_index]);
+            if collected < worker_count {
+                expect_native_blocked(
+                    scheduler
+                        .receive(collector, output)
+                        .context("reblocking native fanout collector")?,
+                    "collector reblock on output",
+                )?;
+                scheduler_operations = scheduler_operations.saturating_add(1);
+            }
+        }
+
+        scheduler
+            .update_tasklet_runtime_state(collector, false, false, iteration.saturating_add(1))
+            .context("completing native fanout collector")?;
+        if collected != worker_count || collected_count_sum != messages_per_iteration {
+            bail!(
+                "native fanout collected {collected}/{worker_count} worker results and {collected_count_sum}/{messages_per_iteration} messages"
+            );
+        }
+        expect_native_queue_empty(&scheduler, queue, "native fanout queue")?;
+        expect_native_channel_balances_zero(&scheduler, &inputs, "native fanout inputs")?;
+        expect_native_channel_balances_zero(&scheduler, &[output], "native fanout output")?;
+
+        logical_operations =
+            logical_operations.saturating_add(messages_per_iteration + worker_count * 2);
+        messages = messages.saturating_add(messages_per_iteration);
+        data_bytes =
+            data_bytes.saturating_add(messages_per_iteration.saturating_mul(payload_bytes));
+        native_scheduler_checksum_update(
+            &mut checksum,
+            &[
+                iteration,
+                collected,
+                collected_count_sum,
+                collected_total_sum,
+            ],
+        );
+        let sample_elapsed = sample_started.elapsed();
+        latency_samples.push(sample_elapsed.as_micros() as u64);
+        latency_samples_ns.push(sample_elapsed.as_nanos() as u64);
+    }
+
+    let duration_us = started.elapsed().as_micros() as u64;
+    let mut row = native_scheduler_row(
+        "native-fanout-pipeline",
+        payload_bytes,
+        iterations,
+        json!({
+            "axis": "message_count",
+            "worker_count": worker_count,
+            "message_count": messages_per_iteration,
+            "payload_bytes": payload_bytes,
+            "iterations_per_process": iterations,
+            "hot_loop_setup": "tasklets, input channels, output channel, and run queue allocated before timed loop"
+        }),
+        duration_us,
+        logical_operations,
+        messages,
+        worker_count,
+        latency_samples,
+        latency_samples_ns,
+        "Rust-owned fanout tasklet pipeline: scheduler wakeups, channel handoffs, worker accounting, and result collection all stay in Rust with no Python tasklet body, Greenlet, PyO3 object access, or refcount work in the hot path.",
+    );
+    add_native_scheduler_workload_metrics(
+        &mut row,
+        messages,
+        data_bytes,
+        scheduler_operations,
+        checksum,
+    );
+    Ok(row)
+}
+
+fn bench_native_scheduler_zone_tick_study(zones: u64, ticks: u64) -> Result<Value> {
+    let (entities_per_zone, message_stride, comparison_size) = match zones {
+        4 => (256_u64, 32_u64, "small"),
+        16 => (1_024_u64, 64_u64, "large"),
+        other => bail!("unsupported native zone tick study zone count: {other}"),
+    };
+    let zones_usize = usize::try_from(zones).context("native zone count exceeds usize")?;
+    let mut scheduler = CoreScheduler::new();
+    let queue = scheduler.create_run_queue();
+    let collector = scheduler.create_tasklet();
+    let output = scheduler.create_channel(0);
+    let zone_tasklets = (0..zones_usize)
+        .map(|_| scheduler.create_tasklet())
+        .collect::<Vec<_>>();
+
+    let mut latency_samples = Vec::with_capacity(ticks as usize);
+    let mut latency_samples_ns = Vec::with_capacity(ticks as usize);
+    let mut logical_operations = 0_u64;
+    let mut scheduler_operations = 0_u64;
+    let mut messages = 0_u64;
+    let mut data_bytes = 0_u64;
+    let mut checksum = native_scheduler_checksum_seed("zone_tick_study");
+    let started = Instant::now();
+
+    for tick in 0..ticks {
+        let sample_started = Instant::now();
+        let mut collected = 0_u64;
+        let mut done = 0_u64;
+        let mut net_messages = 0_u64;
+        let mut collected_value_sum = 0_u64;
+
+        expect_native_blocked(
+            scheduler
+                .receive(collector, output)
+                .context("blocking native zone collector")?,
+            "zone collector output receive",
+        )?;
+        scheduler_operations = scheduler_operations.saturating_add(1);
+
+        for (zone_index, tasklet) in zone_tasklets.iter().enumerate() {
+            scheduler
+                .schedule_tasklet_back(queue, *tasklet)
+                .context("scheduling native zone tasklet")?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            pop_expected_native_tasklet(&mut scheduler, queue, *tasklet, "native zone tasklet")?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+
+            let zone_id = zone_index as u64;
+            let mut total = 0_u64;
+            for entity in 0..entities_per_zone {
+                total = total
+                    .wrapping_mul(1_664_525)
+                    .wrapping_add(entity)
+                    .wrapping_add(zone_id)
+                    .wrapping_add(tick)
+                    .wrapping_add(1_013_904_223)
+                    & 0xFFFF_FFFF;
+                if entity % message_stride == 0 {
+                    expect_native_matched(
+                        scheduler
+                            .send(*tasklet, output)
+                            .context("sending native zone net message")?,
+                        "zone net message to collector send",
+                    )?;
+                    scheduler_operations = scheduler_operations.saturating_add(1);
+                    scheduler
+                        .schedule_tasklet_back(queue, collector)
+                        .context("scheduling native zone collector for net message")?;
+                    scheduler_operations = scheduler_operations.saturating_add(1);
+                    pop_expected_native_tasklet(
+                        &mut scheduler,
+                        queue,
+                        collector,
+                        "native zone collector net message",
+                    )?;
+                    scheduler_operations = scheduler_operations.saturating_add(1);
+                    collected = collected.saturating_add(1);
+                    net_messages = net_messages.saturating_add(1);
+                    collected_value_sum = collected_value_sum.wrapping_add(total & 0xFFFF);
+                    expect_native_blocked(
+                        scheduler
+                            .receive(collector, output)
+                            .context("reblocking native zone collector after net message")?,
+                        "zone collector reblock after net message",
+                    )?;
+                    scheduler_operations = scheduler_operations.saturating_add(1);
+                }
+            }
+
+            expect_native_matched(
+                scheduler
+                    .send(*tasklet, output)
+                    .context("sending native zone done message")?,
+                "zone done message to collector send",
+            )?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            scheduler
+                .update_tasklet_runtime_state(*tasklet, false, false, tick.saturating_add(1))
+                .context("completing native zone tasklet")?;
+            scheduler
+                .schedule_tasklet_back(queue, collector)
+                .context("scheduling native zone collector for done message")?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            pop_expected_native_tasklet(
+                &mut scheduler,
+                queue,
+                collector,
+                "native zone collector done message",
+            )?;
+            scheduler_operations = scheduler_operations.saturating_add(1);
+            collected = collected.saturating_add(1);
+            done = done.saturating_add(1);
+            collected_value_sum = collected_value_sum.wrapping_add(total);
+            if done < zones {
+                expect_native_blocked(
+                    scheduler
+                        .receive(collector, output)
+                        .context("reblocking native zone collector after done message")?,
+                    "zone collector reblock after done message",
+                )?;
+                scheduler_operations = scheduler_operations.saturating_add(1);
+            }
+        }
+
+        scheduler
+            .update_tasklet_runtime_state(collector, false, false, tick.saturating_add(1))
+            .context("completing native zone collector")?;
+        if done != zones {
+            bail!("native zone tick completed {done}/{zones} zones");
+        }
+        expect_native_queue_empty(&scheduler, queue, "native zone queue")?;
+        expect_native_channel_balances_zero(&scheduler, &[output], "native zone output")?;
+
+        let expected_net_messages = zones.saturating_mul(entities_per_zone / message_stride);
+        if net_messages != expected_net_messages {
+            bail!(
+                "native zone tick emitted {net_messages} net messages, expected {expected_net_messages}"
+            );
+        }
+        logical_operations =
+            logical_operations.saturating_add(zones.saturating_mul(entities_per_zone) + collected);
+        messages = messages.saturating_add(net_messages);
+        data_bytes = data_bytes.saturating_add(net_messages.saturating_mul(64));
+        native_scheduler_checksum_update(
+            &mut checksum,
+            &[tick, collected, net_messages, collected_value_sum],
+        );
+        let sample_elapsed = sample_started.elapsed();
+        latency_samples.push(sample_elapsed.as_micros() as u64);
+        latency_samples_ns.push(sample_elapsed.as_nanos() as u64);
+    }
+
+    let duration_us = started.elapsed().as_micros() as u64;
+    let mut row = native_scheduler_row(
+        "native-zone-tick-study",
+        zones,
+        ticks,
+        json!({
+            "axis": "zone_tick_count",
+            "zone_count": zones,
+            "entities_per_zone": entities_per_zone,
+            "tick_count": ticks,
+            "message_stride": message_stride,
+            "comparison_size": comparison_size,
+            "hot_loop_setup": "zone tasklets, collector tasklet, output channel, and run queue allocated before timed loop"
+        }),
+        duration_us,
+        logical_operations,
+        logical_operations,
+        zones,
+        latency_samples,
+        latency_samples_ns,
+        "Rust-owned synthetic zone tick: zone tasklets, entity updates, network-like emissions, channel handoffs, and aggregation all execute in Rust with no Python tasklet body, Greenlet, PyO3 object access, or refcount work in the hot path.",
+    );
+    add_native_scheduler_workload_metrics(
+        &mut row,
+        messages,
+        data_bytes,
+        scheduler_operations,
+        checksum,
+    );
+    Ok(row)
+}
+
+fn expect_native_blocked(result: CoreChannelOperationResult, context: &str) -> Result<()> {
+    match result {
+        CoreChannelOperationResult::Blocked { .. } => Ok(()),
+        other => bail!("expected native channel block during {context}, got {other:?}"),
+    }
+}
+
+fn expect_native_matched(result: CoreChannelOperationResult, context: &str) -> Result<()> {
+    match result {
+        CoreChannelOperationResult::Matched { .. } => Ok(()),
+        other => bail!("expected native channel match during {context}, got {other:?}"),
+    }
+}
+
+fn pop_expected_native_tasklet(
+    scheduler: &mut CoreScheduler,
+    queue: CoreRunQueueId,
+    expected: CoreTaskletId,
+    context: &str,
+) -> Result<()> {
+    let popped = scheduler
+        .pop_next_runnable_tasklet(queue)
+        .with_context(|| format!("popping {context}"))?;
+    if popped != Some(expected) {
+        bail!("expected to pop {expected:?} during {context}, got {popped:?}");
+    }
+    Ok(())
+}
+
+fn expect_native_queue_empty(
+    scheduler: &CoreScheduler,
+    queue: CoreRunQueueId,
+    context: &str,
+) -> Result<()> {
+    let remaining = scheduler
+        .runnable_tasklet_count(queue)
+        .with_context(|| format!("checking {context}"))?;
+    if remaining != 0 {
+        bail!("{context} still has {remaining} runnable tasklets");
+    }
+    Ok(())
+}
+
+fn expect_native_channel_balances_zero(
+    scheduler: &CoreScheduler,
+    channels: &[carbon_scheduler_core::CoreChannelId],
+    context: &str,
+) -> Result<()> {
+    for channel in channels {
+        let snapshot = scheduler
+            .channel_snapshot(*channel)
+            .with_context(|| format!("checking {context} channel balance"))?;
+        if snapshot.balance != 0 {
+            bail!(
+                "{context} left channel {channel:?} balance {}",
+                snapshot.balance
+            );
+        }
+    }
+    Ok(())
+}
+
+fn add_native_scheduler_workload_metrics(
+    row: &mut Value,
+    message_count: u64,
+    data_bytes_processed: u64,
+    scheduler_operation_count: u64,
+    semantic_checksum: u64,
+) {
+    let duration_us = row
+        .get("duration_us")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    if let Some(object) = row.as_object_mut() {
+        object.insert(String::from("message_count"), json!(message_count));
+        object.insert(
+            String::from("data_bytes_processed"),
+            json!(data_bytes_processed),
+        );
+        object.insert(
+            String::from("scheduler_operation_count"),
+            json!(scheduler_operation_count),
+        );
+        object.insert(
+            String::from("throughput_messages_per_sec"),
+            json!(rate_per_second_us(message_count, duration_us)),
+        );
+        object.insert(
+            String::from("throughput_data_bytes_per_sec"),
+            json!(rate_per_second_us(data_bytes_processed, duration_us)),
+        );
+        object.insert(
+            String::from("throughput_scheduler_operations_per_sec"),
+            json!(rate_per_second_us(scheduler_operation_count, duration_us)),
+        );
+        object.insert(
+            String::from("semantic_checksum"),
+            json!(format!("{semantic_checksum:016x}")),
+        );
+    }
+}
+
+fn native_scheduler_checksum_seed(label: &str) -> u64 {
+    let mut checksum = 14_695_981_039_346_656_037_u64;
+    for byte in label.as_bytes() {
+        checksum ^= u64::from(*byte);
+        checksum = checksum.wrapping_mul(1_099_511_628_211);
+    }
+    checksum
+}
+
+fn native_scheduler_checksum_update(checksum: &mut u64, values: &[u64]) {
+    for value in values {
+        *checksum ^= value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        *checksum = checksum.rotate_left(27).wrapping_mul(0x94D0_49BB_1331_11EB);
+    }
 }
 
 fn native_scheduler_row(
@@ -6232,6 +7452,7 @@ fn native_scheduler_row(
     completed_units: u64,
     secondary_units: u64,
     latency_samples: Vec<u64>,
+    latency_samples_ns: Vec<u64>,
     claim_scope: &str,
 ) -> Value {
     json!({
@@ -6240,6 +7461,7 @@ fn native_scheduler_row(
         "workload": format!("native_scheduler_{kind}_{count}"),
         "implementation": "rust_core_scheduler_native_no_python",
         "architecture_lane": "native_rust_scheduler_kernel_no_python_hot_path",
+        "architecture_comparison_key": native_scheduler_row_comparison_key(kind, count),
         "no_python_hot_path": true,
         "no_greenlet_hot_path": true,
         "no_pyo3_hot_path": true,
@@ -6251,6 +7473,8 @@ fn native_scheduler_row(
         "secondary_units": secondary_units,
         "latency_samples_us": latency_samples,
         "latency_us_extended": sample_stats_us_extended(&latency_samples),
+        "latency_samples_ns": latency_samples_ns,
+        "latency_ns_extended": sample_stats_ns_extended(&latency_samples_ns),
         "throughput_operations_per_sec": rate_per_second_us(operation_count, duration_us),
         "throughput_completed_units_per_sec": rate_per_second_us(completed_units, duration_us),
         "primary_throughput_metric": "throughput_operations_per_sec",
@@ -6263,6 +7487,20 @@ fn native_scheduler_row(
         "benchmark_read": "Use this row to estimate target Rust scheduler-kernel upside after removing Python/Greenlet/PyO3 from the hot path; keep separate from same-Python-API parity rows.",
         "iterations_per_process": iterations
     })
+}
+
+fn native_scheduler_row_comparison_key(kind: &str, count: u64) -> Value {
+    match kind {
+        "native-runnable-drain" => json!(format!("runnable_tasklets_{count}")),
+        "native-channel-rendezvous" => json!(format!("channel_rendezvous_{count}")),
+        "native-fanout-pipeline" => json!(format!("fanout_pipeline_{count}b")),
+        "native-zone-tick-study" => match count {
+            4 => json!("zone_tick_study_small"),
+            16 => json!("zone_tick_study_large"),
+            _ => Value::Null,
+        },
+        _ => Value::Null,
+    }
 }
 
 fn generated_runnable_tasklets_scenario(count: u64) -> Result<Scenario> {
@@ -6281,6 +7519,7 @@ fn generated_runnable_tasklets_scenario(count: u64) -> Result<Scenario> {
     Ok(Scenario {
         nested_tasklets: true,
         channel_callbacks: false,
+        scheduler_callbacks: false,
         channels: Vec::new(),
         tasklets,
         entrypoint: Entrypoint::RunScheduler,
@@ -6333,6 +7572,7 @@ fn generated_channel_pairs_scenario(pair_count: u64) -> Result<Scenario> {
     Ok(Scenario {
         nested_tasklets: true,
         channel_callbacks: false,
+        scheduler_callbacks: false,
         channels,
         tasklets,
         entrypoint: Entrypoint::RunScheduler,
@@ -6341,7 +7581,7 @@ fn generated_channel_pairs_scenario(pair_count: u64) -> Result<Scenario> {
 
 fn bench_scalability_data_worker(args: &[String]) -> Result<Value> {
     if args.len() != 3 {
-        bail!("data scalability worker requires <md5-gzip|catalog-roundtrip|catalog-arrow-ipc-roundtrip|catalog-parquet-roundtrip> <size-or-records> <iterations>");
+        bail!("data scalability worker requires <md5-gzip|catalog-roundtrip|catalog-arrow-ipc-roundtrip|catalog-parquet-roundtrip|catalog-interchange-arrow-ipc|catalog-interchange-parquet-zstd> <size-or-records> <iterations>");
     }
     let kind = args[0].as_str();
     let size_or_records = parse_positive_u64(&args[1], "data pressure size")?;
@@ -6354,6 +7594,9 @@ fn bench_scalability_data_worker(args: &[String]) -> Result<Value> {
         }
         "catalog-parquet-roundtrip" => {
             bench_scalability_catalog_native_worker(kind, size_or_records, iterations)
+        }
+        "catalog-interchange-arrow-ipc" | "catalog-interchange-parquet-zstd" => {
+            bench_scalability_catalog_interchange_worker(kind, size_or_records, iterations)
         }
         other => bail!("unsupported data scalability kind: {other}"),
     }
@@ -6543,6 +7786,215 @@ fn bench_scalability_catalog_native_worker(
         "claim_eligibility": "resource_evidence_only_no_speedup_claim",
         "claim_scope": "Rust native columnar resource catalog pressure row; compares data-format cost but is not a legacy C++ speedup claim."
     }))
+}
+
+fn bench_scalability_catalog_interchange_worker(
+    kind: &str,
+    record_count: u64,
+    iterations: u64,
+) -> Result<Value> {
+    let catalog = generated_resource_catalog(record_count)?;
+    let (serialization_format, rust_implementation, native_path_description) = match kind {
+        "catalog-interchange-arrow-ipc" => (
+            "arrow_ipc",
+            "rust_resources_core_arrow_ipc_catalog_interchange",
+            "Arrow IPC write, in-memory byte-copy transmit, and Arrow IPC read",
+        ),
+        "catalog-interchange-parquet-zstd" => (
+            "parquet_zstd",
+            "rust_resources_core_parquet_zstd_catalog_interchange",
+            "Parquet/Zstd write, in-memory byte-copy transmit, and Parquet read",
+        ),
+        other => bail!("unsupported catalog interchange scalability kind: {other}"),
+    };
+
+    let mut legacy_latency_samples = Vec::with_capacity(iterations as usize);
+    let mut rust_latency_samples = Vec::with_capacity(iterations as usize);
+    let mut latency_samples = Vec::with_capacity(iterations as usize);
+    let mut legacy_duration_us = 0_u64;
+    let mut rust_duration_us = 0_u64;
+    let mut legacy_bytes_over_wire = 0_u64;
+    let mut rust_bytes_over_wire = 0_u64;
+    let mut legacy_uncompressed_bytes = 0_u64;
+    let mut rust_uncompressed_bytes = 0_u64;
+    let mut legacy_data_bytes_processed = 0_u64;
+    let mut rust_data_bytes_processed = 0_u64;
+
+    for _ in 0..iterations {
+        let legacy_sample_started = Instant::now();
+        let legacy_document = export_legacy_yaml_resource_group_for_interchange(&catalog);
+        let legacy_document_bytes = legacy_document.as_bytes();
+        let compressed = gzip_compress(legacy_document_bytes)
+            .context("gzip-compressing generated legacy YAML resource catalog")?;
+        let transmitted = transmit_catalog_bytes(&compressed);
+        let decompressed = gzip_decompress(&transmitted)
+            .context("gzip-decompressing transmitted legacy YAML resource catalog")?;
+        let decompressed_text = std::str::from_utf8(&decompressed)
+            .context("recovering transmitted legacy YAML resource catalog text")?;
+        let legacy_parsed = parse_legacy_yaml_resource_group(decompressed_text)
+            .map_err(|error| anyhow!("parsing transmitted legacy YAML catalog failed: {error}"))?;
+        let legacy_sample_us = legacy_sample_started.elapsed().as_micros() as u64;
+        if legacy_parsed != catalog {
+            bail!("legacy YAML/gzip catalog interchange changed catalog semantics");
+        }
+        legacy_duration_us = legacy_duration_us.saturating_add(legacy_sample_us);
+        legacy_latency_samples.push(legacy_sample_us);
+        legacy_uncompressed_bytes = legacy_document_bytes.len() as u64;
+        legacy_bytes_over_wire = transmitted.len() as u64;
+        legacy_data_bytes_processed = legacy_data_bytes_processed.saturating_add(
+            legacy_uncompressed_bytes
+                .saturating_mul(2)
+                .saturating_add(legacy_bytes_over_wire),
+        );
+        black_box(legacy_parsed.resources.len());
+        black_box(transmitted.len());
+
+        let rust_sample_started = Instant::now();
+        let document = match serialization_format {
+            "arrow_ipc" => resource_catalog_to_arrow_ipc_bytes(&catalog).map_err(|error| {
+                anyhow!("writing generated resource catalog Arrow IPC failed: {error}")
+            })?,
+            "parquet_zstd" => resource_catalog_to_parquet_bytes(&catalog).map_err(|error| {
+                anyhow!("writing generated resource catalog Parquet/Zstd failed: {error}")
+            })?,
+            other => bail!("unsupported catalog interchange serialization format: {other}"),
+        };
+        let transmitted = transmit_catalog_bytes(&document);
+        let rust_parsed = match serialization_format {
+            "arrow_ipc" => {
+                resource_catalog_from_arrow_ipc_bytes(&transmitted).map_err(|error| {
+                    anyhow!("reading transmitted resource catalog Arrow IPC failed: {error}")
+                })?
+            }
+            "parquet_zstd" => {
+                resource_catalog_from_parquet_bytes(&transmitted).map_err(|error| {
+                    anyhow!("reading transmitted resource catalog Parquet/Zstd failed: {error}")
+                })?
+            }
+            other => bail!("unsupported catalog interchange serialization format: {other}"),
+        };
+        let rust_sample_us = rust_sample_started.elapsed().as_micros() as u64;
+        if rust_parsed != catalog {
+            bail!("{serialization_format} catalog interchange changed catalog semantics");
+        }
+        rust_duration_us = rust_duration_us.saturating_add(rust_sample_us);
+        rust_latency_samples.push(rust_sample_us);
+        rust_uncompressed_bytes = document.len() as u64;
+        rust_bytes_over_wire = transmitted.len() as u64;
+        rust_data_bytes_processed = rust_data_bytes_processed.saturating_add(
+            rust_uncompressed_bytes
+                .saturating_mul(2)
+                .saturating_add(rust_bytes_over_wire),
+        );
+        latency_samples.push(legacy_sample_us.saturating_add(rust_sample_us));
+        black_box(rust_parsed.resources.len());
+        black_box(transmitted.len());
+    }
+
+    let row_count_processed = record_count.saturating_mul(iterations);
+    let data_bytes_processed =
+        legacy_data_bytes_processed.saturating_add(rust_data_bytes_processed);
+    let duration_us = legacy_duration_us.saturating_add(rust_duration_us);
+    let speedup = speedup_ratio(legacy_duration_us, rust_duration_us);
+
+    Ok(json!({
+        "family": "data",
+        "component": "resources",
+        "workload": format!("data_catalog_interchange_{serialization_format}_{record_count}"),
+        "implementation": rust_implementation,
+        "legacy_implementation": "rust_resources_core_legacy_yaml_gzip_catalog_interchange",
+        "rust_implementation": rust_implementation,
+        "architecture_lane": "native_columnar_catalog_interchange",
+        "serialization_format": serialization_format,
+        "pressure": {
+            "axis": "record_count",
+            "record_count": record_count,
+            "iterations_per_process": iterations,
+            "logical_records_per_interchange": record_count
+        },
+        "duration_us": duration_us,
+        "duration_ms": duration_ms_from_us(duration_us),
+        "operation_count": iterations.saturating_mul(2),
+        "catalog_interchange_count": iterations,
+        "row_count_processed": row_count_processed,
+        "data_bytes_processed": data_bytes_processed,
+        "legacy_duration_us": legacy_duration_us,
+        "rust_duration_us": rust_duration_us,
+        "speedup": speedup,
+        "legacy_throughput_rows_per_sec": rate_per_second_us(row_count_processed, legacy_duration_us),
+        "rust_throughput_rows_per_sec": rate_per_second_us(row_count_processed, rust_duration_us),
+        "throughput_rows_per_sec": rate_per_second_us(row_count_processed.saturating_mul(2), duration_us),
+        "legacy_throughput_data_bytes_per_sec": rate_per_second_us(legacy_data_bytes_processed, legacy_duration_us),
+        "rust_throughput_data_bytes_per_sec": rate_per_second_us(rust_data_bytes_processed, rust_duration_us),
+        "throughput_data_bytes_per_sec": rate_per_second_us(data_bytes_processed, duration_us),
+        "legacy_bytes_over_wire": legacy_bytes_over_wire,
+        "rust_bytes_over_wire": rust_bytes_over_wire,
+        "legacy_uncompressed_bytes": legacy_uncompressed_bytes,
+        "rust_uncompressed_bytes": rust_uncompressed_bytes,
+        "legacy_data_bytes_processed": legacy_data_bytes_processed,
+        "rust_data_bytes_processed": rust_data_bytes_processed,
+        "legacy_latency_samples_us": legacy_latency_samples,
+        "rust_latency_samples_us": rust_latency_samples,
+        "latency_samples_us": latency_samples,
+        "legacy_latency_us_extended": sample_stats_us_extended(&legacy_latency_samples),
+        "rust_latency_us_extended": sample_stats_us_extended(&rust_latency_samples),
+        "latency_us_extended": sample_stats_us_extended(&latency_samples),
+        "primary_throughput_metric": "rust_throughput_rows_per_sec",
+        "primary_latency_metric": "rust_latency_us_extended",
+        "wire_semantics": {
+            "legacy_path": "legacy YAML ResourceGroup bytes gzip-compressed before transmit",
+            "native_path": native_path_description,
+            "transmit_step": "in-memory byte copy of the serialized wire payload before deserialization",
+            "legacy_text_normalization": "quotes legacy YAML string scalars after export so semantic versions, paths, locations, checksums, and prefixes parse as strings"
+        },
+        "parity_status": "pass",
+        "parity_gate": "resource_catalog_interchange_same_logical_records",
+        "comparability": "comparable_end_to_end_catalog_interchange_same_logical_records",
+        "claim": "matched_end_to_end_catalog_interchange_speedup",
+        "claim_scope": format!("End-to-end logical resource catalog interchange for the same generated records: legacy YAML/text encode, gzip compression, in-memory byte-copy transmit, gzip decompression, and parse back to ResourceCatalog vs {native_path_description} back to ResourceCatalog.")
+    }))
+}
+
+fn export_legacy_yaml_resource_group_for_interchange(catalog: &ResourceCatalog) -> String {
+    let document = export_legacy_yaml_resource_group(catalog);
+    let mut output = String::with_capacity(document.len() + catalog.resources.len() * 8);
+    for line in document.lines() {
+        if let Some(value) = line.strip_prefix("Version: ") {
+            push_yaml_quoted_scalar_line(&mut output, "Version: ", value);
+        } else if let Some(value) = line.strip_prefix("  - RelativePath: ") {
+            push_yaml_quoted_scalar_line(&mut output, "  - RelativePath: ", value);
+        } else if let Some(value) = line.strip_prefix("    Location: ") {
+            push_yaml_quoted_scalar_line(&mut output, "    Location: ", value);
+        } else if let Some(value) = line.strip_prefix("    Checksum: ") {
+            push_yaml_quoted_scalar_line(&mut output, "    Checksum: ", value);
+        } else if let Some(value) = line.strip_prefix("    Prefix: ") {
+            push_yaml_quoted_scalar_line(&mut output, "    Prefix: ", value);
+        } else {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+    if !document.ends_with('\n') && output.ends_with('\n') {
+        output.pop();
+    }
+    output
+}
+
+fn push_yaml_quoted_scalar_line(output: &mut String, prefix: &str, value: &str) {
+    output.push_str(prefix);
+    output.push('"');
+    for character in value.chars() {
+        match character {
+            '\\' => output.push_str("\\\\"),
+            '"' => output.push_str("\\\""),
+            _ => output.push(character),
+        }
+    }
+    output.push_str("\"\n");
+}
+
+fn transmit_catalog_bytes(bytes: &[u8]) -> Vec<u8> {
+    black_box(bytes.to_vec())
 }
 
 fn deterministic_bytes(size: u64) -> Result<Vec<u8>> {
@@ -6872,7 +8324,7 @@ fn prepare_scheduler_python_package(build_profile: &str) -> Result<PathBuf> {
         })?;
     }
     fs::copy(
-        "carbonengine/scheduler/python/scheduler/__init__.py",
+        "carbon-scheduler-rs/crates/carbon-scheduler-python/scheduler/__init__.py",
         package_dir.join("scheduler/__init__.py"),
     )
     .with_context(|| {
@@ -7115,7 +8567,7 @@ fn run_scheduler_python_wheel_install_smoke() -> Result<SchedulerPythonWheelSmok
         OsString::from("maturin"),
         OsString::from("build"),
         OsString::from("--manifest-path"),
-        OsString::from("crates/carbon-scheduler-python/Cargo.toml"),
+        OsString::from("carbon-scheduler-rs/crates/carbon-scheduler-python/Cargo.toml"),
         OsString::from("--out"),
         wheel_dir.clone().into_os_string(),
         OsString::from("--compatibility"),
@@ -9152,11 +10604,19 @@ fn legacy_resources() -> Result<()> {
 }
 
 fn rust_resources() -> Result<()> {
-    let command = "cargo test -p carbon-resources-core";
+    let command =
+        "cargo test --manifest-path carbon-resources-rs/Cargo.toml -p carbon-resources-core";
     let started = Instant::now();
     let cargo = env::var("CARGO").unwrap_or_else(|_| String::from("cargo"));
     let output = Command::new(cargo)
-        .args(["test", "-p", "carbon-resources-core"])
+        .args([
+            "test",
+            "--manifest-path",
+            RESOURCES_RS_MANIFEST,
+            "-p",
+            "carbon-resources-core",
+        ])
+        .env("CARGO_TARGET_DIR", FENRIS_CARGO_TARGET_DIR)
         .output()
         .context("running Rust resources core tests")?;
     let cli_parity_cases = if output.status.success() {
@@ -16240,6 +17700,7 @@ fn progress_report() -> Result<()> {
         "rust-resources.json",
         "bench-tier-local.json",
         "scheduler-comparison.json",
+        "scheduler-architecture.json",
         "scalability-matrix.json",
     ];
     let evidence = evidence_files
@@ -16472,16 +17933,21 @@ fn scheduler_comparison_report_ready_blockers(value: &Value) -> Vec<Value> {
         .pointer("/summary/semantic_mismatch_rows")
         .and_then(Value::as_u64)
         .unwrap_or(1);
+    let reconciliation_mismatch_rows = value
+        .pointer("/summary/reconciliation_mismatch_rows")
+        .and_then(Value::as_u64)
+        .unwrap_or(1);
     let rejected_comparisons = value
         .get("rejected_comparisons")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or_default();
-    if semantic_mismatch_rows != 0 || rejected_comparisons != 0 {
+    if semantic_mismatch_rows != 0 || reconciliation_mismatch_rows != 0 || rejected_comparisons != 0
+    {
         blockers.push(readiness_blocker(
-            "scheduler_comparison_semantic_mismatch",
-            "scheduler comparison evidence records semantic mismatches",
-            "fix semantic mismatches before marking scheduler comparison report-ready",
+            "scheduler_comparison_reconciliation_mismatch",
+            "scheduler comparison evidence records semantic or workload/count reconciliation mismatches",
+            "fix benchmark reconciliation mismatches before marking scheduler comparison report-ready",
         ));
     }
     if value.get("build_profile").and_then(Value::as_str) != Some("release-native")
@@ -17100,7 +18566,7 @@ fn shell_quote(value: &str) -> String {
 
 fn print_usage() {
     eprintln!(
-        "usage: cargo run -p xtask -- <command>\n\ncommands:\n  scheduler-fixtures [fixtures/scheduler]\n  scheduler-trace <fixture-path>\n  legacy-scheduler [build|run|build-run|native-linux]\n  legacy-scheduler import <artifact.json|ctest.log> [--host-os <windows|macos>] [--host-arch <x86_64|aarch64>]\n  rust-scheduler-python\n  io-workloads\n  legacy-resources\n  rust-resources\n  bench\n  bench-scheduler-comparison [--workload-set pressure|all] [--tier quick|full] [--samples N]\n  bench-scalability [--tier quick|full] [--families scheduler,native-scheduler,io,data] [--samples N]\n  bench-scheduler-core [fixture-path] [iterations]\n  report-readiness\n  report-progress\n  report\n  rust-resources-cli <legacy-resource-command> [options]\n  rust-create-group [options] <input-directory>\n  rust-create-group-from-filter [options]\n  rust-create-bundle [options] <resource-group-path>\n  rust-unpack-bundle [options] <bundle-resource-group-path>\n  rust-create-patch [options] <previous-resource-group-path> <next-resource-group-path>\n  rust-apply-patch [options] <patch-resource-group-path>\n  rust-merge-group [options] <base-resource-group-path> <merge-resource-group-path>\n  rust-diff-group [options] <base-resource-group-path> <diff-resource-group-path>\n  rust-remove-resources [options] <resource-group-path> <resource-list-path>"
+        "usage: cargo run -p xtask -- <command>\n\ncommands:\n  scheduler-fixtures [fixtures/scheduler]\n  scheduler-trace <fixture-path>\n  legacy-scheduler [build|run|build-run|native-linux]\n  legacy-scheduler import <artifact.json|ctest.log> [--host-os <windows|macos>] [--host-arch <x86_64|aarch64>]\n  rust-scheduler-python\n  io-workloads\n  legacy-resources\n  rust-resources\n  bench\n  bench-scheduler-comparison [--workload-set pressure|all] [--tier quick|full] [--samples N]\n  bench-scheduler-architecture [--tier quick|full] [--samples N]\n  bench-scalability [--tier quick|full] [--families scheduler,native-scheduler,io,data] [--samples N]\n  bench-scheduler-core [fixture-path] [iterations]\n  report-readiness\n  report-progress\n  report\n  rust-resources-cli <legacy-resource-command> [options]\n  rust-create-group [options] <input-directory>\n  rust-create-group-from-filter [options]\n  rust-create-bundle [options] <resource-group-path>\n  rust-unpack-bundle [options] <bundle-resource-group-path>\n  rust-create-patch [options] <previous-resource-group-path> <next-resource-group-path>\n  rust-apply-patch [options] <patch-resource-group-path>\n  rust-merge-group [options] <base-resource-group-path> <merge-resource-group-path>\n  rust-diff-group [options] <base-resource-group-path> <diff-resource-group-path>\n  rust-remove-resources [options] <resource-group-path> <resource-list-path>"
     );
 }
 
@@ -19833,7 +21299,7 @@ fn performance_comparability_summary(entries: &[Value]) -> String {
         })
         .count();
     format!(
-        "{comparable} comparable legacy-vs-Rust rows; {non_comparable} non-comparable rows shown with reasons ({scheduler_resource_only} scheduler resource-only, {scheduler_pressure_only} scheduler pressure, {io_bridge_only} IO baseline-vs-bridge, {rust_only} Rust-only); {speedup_claims} optimized-baseline speedup claim rows."
+        "{comparable} comparable legacy-vs-Rust rows; {non_comparable} non-comparable rows shown with reasons ({scheduler_resource_only} scheduler resource-only, {scheduler_pressure_only} scheduler pressure, {io_bridge_only} IO local pressure only, {rust_only} Rust-only); {speedup_claims} optimized-baseline speedup claim rows."
     )
 }
 
@@ -20502,6 +21968,8 @@ mod tests {
                 "message_count": 0,
                 "data_bytes_processed": 0,
                 "latency_samples_us": [10, 20],
+                "workload": "runnable_tasklets",
+                "spec": {"name": "runnable_tasklets_128", "workload": "runnable_tasklets", "tasklets": 128, "iterations": 1},
                 "semantic_checksum": "same"
             })],
             process_metrics: vec![ProcessMetrics {
@@ -20521,6 +21989,8 @@ mod tests {
                 "message_count": 0,
                 "data_bytes_processed": 0,
                 "latency_samples_us": [5, 10],
+                "workload": "runnable_tasklets",
+                "spec": {"name": "runnable_tasklets_128", "workload": "runnable_tasklets", "tasklets": 128, "iterations": 1},
                 "semantic_checksum": "same"
             })],
             process_metrics: vec![ProcessMetrics {
@@ -20545,6 +22015,26 @@ mod tests {
             Some(0)
         );
         assert_eq!(
+            row.pointer("/reconciliation/status")
+                .and_then(Value::as_str),
+            Some("pass")
+        );
+        assert_eq!(
+            row.pointer("/reconciliation/mismatch_count")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            row.pointer("/reconciliation/checks/operation_count_match")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            row.pointer("/reconciliation/checks/semantic_checksum_match")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             row.pointer("/legacy_sample_stats_us/p99_9")
                 .and_then(Value::as_u64),
             Some(20)
@@ -20563,6 +22053,18 @@ mod tests {
         assert_eq!(
             number_at(&summary, &["geomean_throughput_speedup"]),
             Some(2.0)
+        );
+        assert_eq!(
+            summary
+                .get("reconciliation_mismatch_rows")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            summary
+                .get("reconciled_comparison_count")
+                .and_then(Value::as_u64),
+            Some(1)
         );
     }
 
@@ -20618,7 +22120,7 @@ mod tests {
             "target_cpu_native": false,
             "debug_assertions": true,
             "samples_per_row": 1,
-            "summary": {"semantic_mismatch_rows": 1},
+            "summary": {"semantic_mismatch_rows": 1, "reconciliation_mismatch_rows": 1},
             "comparisons": []
         });
 
@@ -20628,7 +22130,9 @@ mod tests {
         ));
         assert!(codes.contains(&String::from("scheduler_comparison_no_rows")));
         assert!(codes.contains(&String::from("scheduler_comparison_too_few_samples")));
-        assert!(codes.contains(&String::from("scheduler_comparison_semantic_mismatch")));
+        assert!(codes.contains(&String::from(
+            "scheduler_comparison_reconciliation_mismatch"
+        )));
         assert!(codes.contains(&String::from("scheduler_comparison_not_release_native")));
     }
 
@@ -20693,6 +22197,36 @@ mod tests {
     }
 
     #[test]
+    fn parses_scheduler_architecture_benchmark_args() {
+        let default_config =
+            parse_bench_scheduler_architecture_args(Vec::new()).expect("parse defaults");
+
+        assert_eq!(default_config.tier, ScalabilityTier::Quick);
+        assert_eq!(default_config.samples, 5);
+        assert_eq!(
+            default_config.output,
+            evidence_path("scheduler-architecture.json")
+        );
+
+        let full_config = parse_bench_scheduler_architecture_args(vec![
+            String::from("--tier"),
+            String::from("full"),
+            String::from("--samples"),
+            String::from("99"),
+            String::from("--output"),
+            String::from("target/custom-scheduler-architecture.json"),
+        ])
+        .expect("parse explicit args");
+
+        assert_eq!(full_config.tier, ScalabilityTier::Full);
+        assert_eq!(full_config.samples, 50);
+        assert_eq!(
+            full_config.output,
+            PathBuf::from("target/custom-scheduler-architecture.json")
+        );
+    }
+
+    #[test]
     fn native_scheduler_worker_records_no_python_architecture_lane() {
         let row = bench_scalability_native_scheduler_worker(&[
             String::from("native-runnable-drain"),
@@ -20710,6 +22244,11 @@ mod tests {
             Some("native_rust_scheduler_kernel_no_python_hot_path")
         );
         assert_eq!(
+            row.get("architecture_comparison_key")
+                .and_then(Value::as_str),
+            Some("runnable_tasklets_8")
+        );
+        assert_eq!(
             row.get("no_python_hot_path").and_then(Value::as_bool),
             Some(true)
         );
@@ -20719,6 +22258,174 @@ mod tests {
         );
         assert!(
             number_at(&row, &["throughput_operations_per_sec"]).is_some_and(|value| value > 0.0)
+        );
+        assert!(number_at(&row, &["latency_ns_extended", "p99"]).is_some_and(|value| value > 0.0));
+    }
+
+    #[test]
+    fn native_scheduler_specs_align_with_bridge_pressure_rows() {
+        let keys = scalability_native_scheduler_specs(ScalabilityTier::Quick)
+            .into_iter()
+            .map(|spec| spec.workload)
+            .collect::<Vec<_>>();
+
+        assert!(keys.contains(&String::from("native_scheduler_native-runnable-drain_128")));
+        assert!(keys.contains(&String::from("native_scheduler_native-runnable-drain_1024")));
+        assert!(keys.contains(&String::from(
+            "native_scheduler_native-channel-rendezvous_32"
+        )));
+        assert!(keys.contains(&String::from(
+            "native_scheduler_native-channel-rendezvous_256"
+        )));
+        assert!(keys.contains(&String::from("native_scheduler_native-fanout-pipeline_256")));
+        assert!(keys.contains(&String::from("native_scheduler_native-zone-tick-study_4")));
+    }
+
+    #[test]
+    fn native_scheduler_architecture_comparison_joins_bridge_rows() {
+        let native = bench_scalability_native_scheduler_worker(&[
+            String::from("native-runnable-drain"),
+            String::from("8"),
+            String::from("2"),
+        ])
+        .expect("run native scheduler worker");
+        let bridge = json!({
+            "comparisons": [{
+                "comparability": "comparable_scheduler_python_api_process_to_process",
+                "comparison_group": "runnable_tasklets_8",
+                "workload": "runnable_tasklets_8",
+                "rust_implementation": "rust_scheduler_python_bridge",
+                "rust_throughput_operations_per_sec": 1000.0,
+                "rust_throughput_messages_per_sec": 0.0,
+                "rust_sample_stats_us": {"p99": 1000},
+                "rust_process_stats": {
+                    "cpu_burn_effective_ms": {"mean": 10.0},
+                    "max_rss_kb": {"p95": 20000}
+                }
+            }]
+        });
+
+        let comparisons = scheduler_architecture_comparisons(&[native], Some(&bridge));
+
+        assert_eq!(comparisons.len(), 1);
+        let comparison = &comparisons[0];
+        assert_eq!(
+            comparison.get("comparability").and_then(Value::as_str),
+            Some("rust_bridge_vs_native_no_python_same_pressure_shape_architecture_probe")
+        );
+        assert_eq!(
+            comparison
+                .get("no_python_hot_path")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(comparison
+            .get("native_over_bridge_comparable_throughput_ratio")
+            .and_then(json_number)
+            .is_some_and(|ratio| ratio > 0.0));
+        assert_eq!(
+            scheduler_architecture_comparison_summary(&comparisons)
+                .get("row_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn native_scheduler_architecture_comparison_uses_message_metric_for_fanout() {
+        let native = bench_scalability_native_scheduler_worker(&[
+            String::from("native-fanout-pipeline"),
+            String::from("256"),
+            String::from("1"),
+        ])
+        .expect("run native fanout worker");
+        let bridge = json!({
+            "comparisons": [{
+                "comparability": "comparable_scheduler_python_api_process_to_process",
+                "comparison_group": "fanout_pipeline_256b",
+                "workload": "fanout_pipeline_256b",
+                "rust_implementation": "rust_scheduler_python_bridge",
+                "rust_throughput_operations_per_sec": 1000.0,
+                "rust_throughput_messages_per_sec": 500.0,
+                "rust_sample_stats_us": {"p99": 1000},
+                "rust_process_stats": {
+                    "cpu_burn_effective_ms": {"mean": 10.0},
+                    "max_rss_kb": {"p95": 20000}
+                }
+            }]
+        });
+
+        let comparisons = scheduler_architecture_comparisons(&[native], Some(&bridge));
+
+        assert_eq!(comparisons.len(), 1);
+        assert_eq!(
+            comparisons[0]
+                .get("bridge_comparable_metric")
+                .and_then(Value::as_str),
+            Some("rust_bridge_messages_per_sec")
+        );
+        assert_eq!(
+            comparisons[0]
+                .get("native_comparable_metric")
+                .and_then(Value::as_str),
+            Some("native_messages_per_sec")
+        );
+        assert!(comparisons[0]
+            .get("native_over_bridge_comparable_throughput_ratio")
+            .and_then(json_number)
+            .is_some_and(|ratio| ratio > 0.0));
+    }
+
+    #[test]
+    fn native_scheduler_worker_records_rust_owned_tasklet_workload_lane() {
+        let fanout = bench_scalability_native_scheduler_worker(&[
+            String::from("native-fanout-pipeline"),
+            String::from("256"),
+            String::from("1"),
+        ])
+        .expect("run native fanout worker");
+
+        assert_eq!(
+            fanout
+                .get("architecture_comparison_key")
+                .and_then(Value::as_str),
+            Some("fanout_pipeline_256b")
+        );
+        assert_eq!(
+            fanout.get("no_python_hot_path").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            fanout.get("message_count").and_then(Value::as_u64),
+            Some(512)
+        );
+        assert!(
+            number_at(&fanout, &["throughput_messages_per_sec"]).is_some_and(|value| value > 0.0)
+        );
+        assert!(fanout
+            .get("semantic_checksum")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()));
+
+        let zone = bench_scalability_native_scheduler_worker(&[
+            String::from("native-zone-tick-study"),
+            String::from("4"),
+            String::from("1"),
+        ])
+        .expect("run native zone worker");
+
+        assert_eq!(
+            zone.get("architecture_comparison_key")
+                .and_then(Value::as_str),
+            Some("zone_tick_study_small")
+        );
+        assert_eq!(
+            zone.pointer("/pressure/axis").and_then(Value::as_str),
+            Some("zone_tick_count")
+        );
+        assert_eq!(zone.get("message_count").and_then(Value::as_u64), Some(32));
+        assert!(
+            number_at(&zone, &["throughput_data_bytes_per_sec"]).is_some_and(|value| value > 0.0)
         );
     }
 
@@ -21081,7 +22788,7 @@ OK (skipped=7)
         assert!(rows.contains("3.00 ms effective mean"));
         let summary = performance_comparability_summary(&entries);
         assert!(summary.contains("1 scheduler resource-only"));
-        assert!(summary.contains("1 IO baseline-vs-bridge"));
+        assert!(summary.contains("1 IO local pressure only"));
     }
 
     #[test]

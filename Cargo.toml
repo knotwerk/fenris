@@ -1,13 +1,5 @@
 [workspace]
 members = [
-    "crates/carbon-resources-compat",
-    "crates/carbon-resources-core",
-    "crates/carbon-resources-pipeline",
-    "crates/carbon-resources-trace",
-    "crates/carbon-scheduler-core",
-    "crates/carbon-scheduler-ffi",
-    "crates/carbon-scheduler-python",
-    "crates/carbon-scheduler-trace",
     "xtask",
 ]
 resolver = "2"

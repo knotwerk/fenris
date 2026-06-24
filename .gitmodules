@@ -22,3 +22,7 @@
 	path = carbon-scheduler-rs
 	url = https://github.com/knotwerk/carbon-scheduler-rs.git
 	ignore = dirty
+[submodule "carbon-resources-rs"]
+	path = carbon-resources-rs
+	url = https://github.com/knotwerk/carbon-resources-rs.git
+	ignore = dirty

@@ -1,6 +1,7 @@
 /target/
 /xtask/target/
 /carbon-scheduler-rs/target/
+/carbon-resources-rs/target/
 **/target/
 
 /.idea/

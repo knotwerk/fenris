@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-carbon-resources-core = { path = "../crates/carbon-resources-core" }
-carbon-scheduler-core = { path = "../crates/carbon-scheduler-core" }
-carbon-scheduler-trace = { path = "../crates/carbon-scheduler-trace" }
+carbon-resources-core = { path = "../carbon-resources-rs/crates/carbon-resources-core" }
+carbon-scheduler-core = { path = "../carbon-scheduler-rs/crates/carbon-scheduler-core" }
+carbon-scheduler-trace = { path = "../carbon-scheduler-rs/crates/carbon-scheduler-trace" }
 serde_json.workspace = true
