@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "channel_preference_neither_multi_party_order",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_channel.py::TestChannels::test_preference_neither",
       "carbonengine/scheduler/src/Channel.cpp::Send",

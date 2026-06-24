@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "tasklet_unbind_paused",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_tasklet.py::TestBind::test_unbind_ok"
     ],

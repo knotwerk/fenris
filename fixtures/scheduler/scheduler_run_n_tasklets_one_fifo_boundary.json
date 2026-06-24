@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "scheduler_run_n_tasklets_one_fifo_boundary",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/capiTest/Scheduler.cpp::PyScheduler_RunNTasklets",
       "tests/python/scheduler/tests/test_scheduler.py::TestScheduleOrderBase::test_scheduler_run_order"

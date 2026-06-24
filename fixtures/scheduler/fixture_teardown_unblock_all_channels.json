@@ -1,15 +1,15 @@
 {
   "schema": "carbon-scheduler.semantic-trace.v0",
-  "name": "fixture_teardown_blocked_channel_cleanup",
+  "name": "fixture_teardown_unblock_all_channels",
   "source": {
     "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_utils.py::SchedulerTestCaseBase.tearDown",
-      "carbonengine/scheduler/src/Channel.cpp::ClearBlocked"
+      "carbonengine/scheduler/src/Channel.cpp::UnblockAllActiveChannels"
     ],
     "legacy_behavior": [
-      "Scheduler test teardown drains runnable tasklets, unblocks active channels, then verifies the scheduler is back to the main-only state.",
-      "Blocked sender and receiver queues must be empty after teardown cleanup."
+      "Scheduler teardown calls unblock_all_channels rather than clearing known channels one by one.",
+      "Only active channels with nonzero balance are cleared and counted."
     ]
   },
   "check_events": false,
@@ -20,6 +20,9 @@
       },
       {
         "id": "receive_queue"
+      },
+      {
+        "id": "idle_queue"
       }
     ],
     "tasklets": [
@@ -57,23 +60,8 @@
     "run_count": 1,
     "blocked_tasklet_count": 2,
     "blocked_channel_count": 2,
+    "active_channel_count": 3,
     "active_tasklet_count": 3,
-    "tasklets": {
-      "blocked_sender": {
-        "alive": true,
-        "blocked": true,
-        "blocked_on": "send_queue",
-        "blocked_direction": "send",
-        "scheduled": false
-      },
-      "blocked_receiver": {
-        "alive": true,
-        "blocked": true,
-        "blocked_on": "receive_queue",
-        "blocked_direction": "receive",
-        "scheduled": false
-      }
-    },
     "channels": {
       "send_queue": {
         "balance": 1,
@@ -88,23 +76,18 @@
         "blocked_receivers": [
           "blocked_receiver"
         ]
+      },
+      "idle_queue": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
       }
     }
   },
   "teardown": {
     "steps": [
       {
-        "op": "run_scheduler"
-      },
-      {
-        "op": "clear",
-        "channel": "send_queue",
-        "pending": false
-      },
-      {
-        "op": "clear",
-        "channel": "receive_queue",
-        "pending": false
+        "op": "unblock_all_channels"
       },
       {
         "op": "run_scheduler"
@@ -115,6 +98,7 @@
       "run_count": 1,
       "blocked_tasklet_count": 0,
       "blocked_channel_count": 0,
+      "active_channel_count": 3,
       "active_tasklet_count": 1,
       "all_time_tasklet_count": 3,
       "tasklets": {
@@ -141,8 +125,42 @@
           "balance": 0,
           "blocked_senders": [],
           "blocked_receivers": []
+        },
+        "idle_queue": {
+          "balance": 0,
+          "blocked_senders": [],
+          "blocked_receivers": []
         }
       }
     }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      {
+        "kind": "scheduler.unblock_all_channels",
+        "actor": "main",
+        "channels": [
+          "receive_queue",
+          "send_queue"
+        ],
+        "unblocked_channel_count": 2,
+        "active_channel_count": 3,
+        "blocked_channel_count": 0
+      }
+    ],
+    "match_counts": [
+      {
+        "event": {
+          "kind": "scheduler.unblock_all_channels"
+        },
+        "count": 1
+      },
+      {
+        "event": {
+          "kind": "channel.clear"
+        },
+        "count": 2
+      }
+    ]
   }
 }

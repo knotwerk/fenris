@@ -66,15 +66,16 @@ workspace has these useful pieces:
   thread-local compatibility state while CoreScheduler remains the runnable
   ordering authority.
 - The Python bridge test suite is locally green at `57/57` tests.
-- The core/trace/FFI tests are locally green at `13/13`, `3/3`, and `1/1`
+- The core/trace/FFI tests are locally green at `14/14`, `1/1`, and `3/3`
   respectively.
 - `cargo run -p xtask -- rust-scheduler-python` records the PyO3 bridge as a
   compatibility boundary, not the final scheduler architecture.
-- `target/carbon/evidence/scheduler-fixtures.json` passes `56/56` semantic
+- `target/carbon/evidence/scheduler-fixtures.json` passes `59/59` semantic
   fixtures, including trace-expectation bounded-pump schedule-order fixtures
   invalid direct tasklet run/switch no-mutation coverage, `scheduler.schedule`
   BACK reschedule ordering, FRONT_PLUS_ONE targeted-run boundary coverage, and
-  switch-trap operation rejection without mutating schedule/schedule_remove events, and is
+  switch-trap operation rejection without mutating schedule/schedule_remove
+  events, nested parent/depth tasklet-chain coverage, and is
   `report_ready=true` for the scheduler fixture gate.
 - `target/carbon/evidence/legacy-scheduler.json` now passes the native Linux
   source-build path with the unchanged legacy Python unittest suite (`210`
@@ -236,9 +237,9 @@ is the shortest path from the current progress report to the final HTML report.
 
 | Gate | Current evidence | Blocker | Next proof |
 | --- | --- | --- | --- |
-| Scheduler semantic fixtures | `scheduler-fixtures.json` passes 56/56 fixtures, including limited `run_n_tasklets(1)` schedule-order fixtures, invalid direct tasklet run/switch no-mutation coverage, `scheduler.schedule` BACK requeue ordering, FRONT_PLUS_ONE targeted-run boundary trace expectations, switch-trap trapped-operation counts with zero mutating schedule/schedule_remove events, and fixture-level blocked-channel teardown cleanup, `report_ready=true` | Closed for the current deterministic core fixture gate | Keep this gate green while core ownership moves out of the Python bridge; add new fixtures when ownership changes touch tasklet, channel, timeout, switch-trap, or cleanup semantics. |
+| Scheduler semantic fixtures | `scheduler-fixtures.json` passes 59/59 fixtures, including limited `run_n_tasklets(1)` schedule-order fixtures, invalid direct tasklet run/switch no-mutation coverage, `scheduler.schedule` BACK requeue ordering, FRONT_PLUS_ONE targeted-run boundary trace expectations, switch-trap trapped-operation counts with zero mutating schedule/schedule_remove events, scheduler callback previous/next switch-point trace expectations, nested tasklet parent/depth chain coverage, fixture-level blocked-channel teardown cleanup, and scheduler-level `unblock_all_channels` cleanup with active-channel count invariants, `report_ready=true` | Closed for the current deterministic core fixture gate | Keep this gate green while core ownership moves out of the Python bridge; add new fixtures when ownership changes touch tasklet, channel, timeout, switch-trap, callback, or cleanup semantics. |
 | Legacy scheduler baseline | `legacy-scheduler.json` passes `cargo run -p xtask -- legacy-scheduler native-linux` on this host with `210` Python tests, `7` skips, and `36/36` C API CTest cases, `report_ready=true` | Closed for this host | Keep this gate green before publishing scheduler comparison evidence. |
-| Rust scheduler Python/C API | `rust-scheduler-python.json` passes, `core_ownership_status.status=partial`; covered channel transfers now use core-owned payload handoff tokens, blocked throw cleanup resolves channel/direction from core snapshots, and public tasklet call/setup/insert/run/switch guards plus C API block-trap reads consult core snapshots while PyO3 stores the actual Python value/exception objects | Queue identity adapters, remaining lifecycle decisions, callbacks, refcount/GC, Python payload object storage, and in-process C API coverage are not final | Make `CoreScheduler` snapshots authoritative for the remaining lifecycle/channel decisions while PyO3 holds only compatibility payload objects; keep unchanged Python tests and C API source slices green. |
+| Rust scheduler Python/C API | `rust-scheduler-python.json` passes, `core_ownership_status.status=partial`; covered channel transfers now use core-owned payload handoff tokens, blocked send/receive tasklet state projection, live channel-continuation projection, current-tasklet channel handoff requeue projection, `schedule_remove` pause projection, and blocked throw cleanup read core snapshots, public tasklet call/setup/insert/run/switch/bind/unbind/dont_raise guards plus C API block-trap reads consult core snapshots, and schedule-manager refcount/weakref/thread-cache teardown is covered while PyO3 stores the actual Python value/exception objects | Queue identity adapters, remaining lifecycle decisions, callbacks, broader refcount/GC, Python payload object storage, and in-process C API coverage are not final | Make `CoreScheduler` snapshots authoritative for the remaining lifecycle/channel decisions while PyO3 holds only compatibility payload objects; keep unchanged Python tests and C API source slices green. |
 | Realistic IO workloads | `io-workloads.json` passes loopback and fixture-only traces; `io-workloads` can now import timing-free normalized trace artifacts from `CARBON_LEGACY_CARBONIO_TRACE_JSON` and `CARBON_RUST_CARBONIO_TRACE_JSON` | No captured legacy `carbonio`/`_socket`/`_ssl` semantic trace comparison from supported-platform artifacts | Capture or import supported-platform legacy Carbon IO traces and compare normalized wake/send/throw events against the Rust bridge until `legacy_carbonio_trace_status=pass`. |
 | Scheduler benchmark comparability | `scheduler-comparison.json` has matched legacy C++ scheduler vs Rust scheduler bridge pressure rows with semantic checksums, throughput, p99/p99.9, CPU p95, peak RSS p95, and throughput CV | Real game-environment validation is still not captured | Use the lab rows for clearly labeled scheduler comparison, then add a real game trace or harness before production scheduler claims. |
 | Final report | `report-progress` writes HTML; `report` exits `1` | Multiple evidence files have `report_ready=false` | Every feature/performance claim in the final report links to passing, report-ready evidence. |
@@ -252,16 +253,17 @@ that move existing tests toward `report_ready=true`.
 ## Pre-V2 Commit Checklist
 
 Before starting the V2 experiment sequence, commit the current parity baseline
-with enough evidence that future performance work can be judged cleanly. The
-current `/data/repos/fenris` folder is not itself a git repository; use a real
-child repo boundary or initialize the intended migration workspace before
-recording the baseline.
+with enough evidence that future performance work can be judged cleanly. Fenris
+is the integration repo; scheduler implementation commits belong in
+`carbon-scheduler-rs`.
 
 Required before the baseline commit:
 
-- `cargo test -p carbon-scheduler-core -p carbon-scheduler-trace -p
-  carbon-scheduler-ffi` passes.
-- `cargo test -p carbon-scheduler-python` passes.
+- `cargo test --manifest-path carbon-scheduler-rs/Cargo.toml -p
+  carbon-scheduler-core -p carbon-scheduler-trace -p carbon-scheduler-ffi`
+  passes.
+- `cargo test --manifest-path carbon-scheduler-rs/Cargo.toml -p
+  carbon-scheduler-python` passes.
 - `cargo run -p xtask -- scheduler-fixtures` passes.
 - `cargo run -p xtask -- rust-scheduler-python` passes.
 - `scripts/carbon-native-bench.sh bench-scheduler-comparison --workload-set
@@ -516,11 +518,18 @@ current Python bridge pressure rows because those rows are dominated by bridge
 and control-flow costs. It is not premature for native Rust lanes once a dense
 workload exists and a scalar Rust baseline is green.
 
-Current implementation: `bench-scalability --families native-scheduler` records
-the native Rust scheduler kernel lane. The quick tier covers runnable queue
-drain, channel rendezvous, and domain-style wakeups with `no_python_hot_path`
-metadata. These rows are target-architecture probes; they should be shown beside
-the bridge parity rows, not merged into legacy speedup claims.
+Current implementation: `bench-scheduler-architecture` records the native Rust
+scheduler kernel lane as a first-class architecture test. It samples native
+runnable queue drain and channel rendezvous at the same pressure points as the
+bridge parity rows, and it now also samples Rust-owned fanout-pipeline and
+zone-tick-study work where tasklet bodies, worker accounting, entity updates,
+channel handoffs, and aggregation stay in Rust. The command joins matching rows
+to `scheduler-comparison.json` and writes `scheduler-architecture.json` with the
+bridge-versus-native comparison, `no_python_hot_path` metadata, and explicit
+non-claims. `bench-scalability` with `--families native-scheduler` still records
+the broader native matrix, including larger queue/domain wakeup probes. These
+rows are target-architecture probes; they should be shown beside the bridge
+parity rows, not merged into legacy speedup claims.
 
 ## Post-Parity Experiment Sequence
 

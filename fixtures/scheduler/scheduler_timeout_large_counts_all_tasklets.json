@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "scheduler_timeout_large_counts_all_tasklets",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/capiTest/Scheduler.cpp::PyScheduler_GetTaskletsCompletedLastRunWithTimeout",
       "tests/capiTest/Scheduler.cpp::PyScheduler_GetTaskletsSwitchedLastRunWithTimeout"

@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "main_receive_immediate_deadlock",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_channel.py::TestChannels::test_main_tasklet_blocking_without_a_sender"
     ]

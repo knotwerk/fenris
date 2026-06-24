@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "scheduler_schedule_back_reschedule_order",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_scheduler.py::TestSchedule::test_schedule",
       "tests/python/scheduler/tests/test_scheduler.py::TestScheduleOrderBase::test_nested_tasklet_run_order_with_schedule"

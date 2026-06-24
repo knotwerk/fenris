@@ -6,7 +6,9 @@ port="${1:-8765}"
 selected_port=""
 
 cd "${repo_root}"
-python3 scripts/render-blog-report.py
+python3 scripts/render-carbon-to-rust-migration-test.py
+report_file="carbon-to-rust-migration-test.html"
+guide_file="carbon-to-rust-reporting-guide.html"
 
 for candidate in $(seq "${port}" "$((port + 50))"); do
   if python3 - "${candidate}" <<'PY'
@@ -31,6 +33,7 @@ if [[ -z "${selected_port}" ]]; then
   exit 1
 fi
 
-echo "Serving blog report at http://127.0.0.1:${selected_port}/blog.html"
+echo "Serving Carbon to Rust migration test at http://127.0.0.1:${selected_port}/${report_file}"
+echo "Reporting guide at http://127.0.0.1:${selected_port}/${guide_file}"
 cd "${repo_root}/target/carbon/report"
 python3 -m http.server "${selected_port}" --bind 127.0.0.1

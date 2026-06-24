@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "schedule_remove_reinsert_paused_tasklet",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_scheduler.py::TestScheduler::test_schedule_remove_fail",
       "tests/python/scheduler/tests/test_tasklet.py::TestTasklets::test_paused",

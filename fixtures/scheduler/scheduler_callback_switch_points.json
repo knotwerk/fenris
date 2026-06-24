@@ -1,0 +1,105 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "scheduler_callback_switch_points",
+  "source": {
+    "repo": "carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_scheduler.py::TestCallbacks::test_schedule_callback_basic",
+      "tests/python/scheduler/tests/test_scheduler.py::TestCallbacks::test_schedule_callback_with_multiple_threads",
+      "carbonengine/scheduler/src/ScheduleManager.cpp::OnSwitch"
+    ],
+    "legacy_behavior": [
+      "Each scheduler current-tasklet change invokes the schedule callback with the previous and next tasklets.",
+      "The core trace records callback points and tasklet identity; the PyO3 bridge remains responsible for invoking Python and fast C callbacks."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "scheduler_callbacks": true,
+    "tasklets": [
+      {
+        "id": "t1",
+        "body": [
+          { "op": "append", "target": "completed", "value": "t1" }
+        ]
+      },
+      {
+        "id": "t2",
+        "body": [
+          { "op": "append", "target": "completed", "value": "t2" }
+        ]
+      }
+    ],
+    "entrypoint": { "op": "run_scheduler" }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      {
+        "kind": "scheduler.switch",
+        "from": "main",
+        "to": "t1",
+        "reason": "next_runnable"
+      },
+      {
+        "kind": "scheduler.callback",
+        "previous": "main",
+        "next": "t1",
+        "reason": "next_runnable"
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "t1",
+        "to": "main",
+        "reason": "tasklet_complete"
+      },
+      {
+        "kind": "scheduler.callback",
+        "previous": "t1",
+        "next": "main",
+        "reason": "tasklet_complete"
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "main",
+        "to": "t2",
+        "reason": "next_runnable"
+      },
+      {
+        "kind": "scheduler.callback",
+        "previous": "main",
+        "next": "t2",
+        "reason": "next_runnable"
+      },
+      {
+        "kind": "scheduler.switch",
+        "from": "t2",
+        "to": "main",
+        "reason": "run_complete"
+      },
+      {
+        "kind": "scheduler.callback",
+        "previous": "t2",
+        "next": "main",
+        "reason": "run_complete"
+      }
+    ],
+    "match_counts": [
+      { "event": { "kind": "scheduler.callback" }, "count": 4 }
+    ]
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": ["t1", "t2"],
+    "scheduler_callbacks": [
+      { "previous": "main", "next": "t1", "reason": "next_runnable" },
+      { "previous": "t1", "next": "main", "reason": "tasklet_complete" },
+      { "previous": "main", "next": "t2", "reason": "next_runnable" },
+      { "previous": "t2", "next": "main", "reason": "run_complete" }
+    ],
+    "tasklets": {
+      "t1": { "alive": false, "scheduled": false, "times_switched_to": 1 },
+      "t2": { "alive": false, "scheduled": false, "times_switched_to": 1 }
+    }
+  }
+}

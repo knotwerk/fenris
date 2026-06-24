@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "tasklet_kill_pending_and_immediate",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_tasklet.py::TestTasklets::test_kill_tasklet",
       "tests/python/scheduler/tests/test_tasklet.py::TestKill::test_kill_pending_true"

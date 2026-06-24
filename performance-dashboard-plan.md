@@ -14,8 +14,10 @@ instead of moving YAML/CSV/JSON-like manifests through the hot path.
   is not: the Rust scheduler bridge is slower on every matched quick workload.
 - The first optimization targets are fanout pipeline, fake zone tick tail
   latency, channel rendezvous, and runnable queue pressure.
-- Resource CLI rows are useful local evidence, but speedup language is gated by
-  optimized legacy-baseline selection and release-native Rust metadata.
+- Resource CLI rows now have a narrow optimized-baseline lane: 9 comparable
+  process rows use selected non-debug legacy Release binaries and Rust
+  `release-native`. Broader speedup language is still gated by broader parity
+  and report readiness.
 - The native resource format lane now has concrete `ResourceCatalog` Arrow IPC
   and Parquet/Zstd round-trip support; broader bundle/patch metadata migration
   remains follow-up work.
@@ -23,6 +25,8 @@ instead of moving YAML/CSV/JSON-like manifests through the hot path.
 ## Dashboard Requirements
 
 - Show scheduler parity, current speed ratio, p99 tail, CPU, and RSS first.
+- Show reconciliation for comparable performance rows: same workload spec,
+  operation/message/data counts, semantic checksums, and zero mismatches.
 - Show a regression table sorted worst-first, including the likely first
   optimization target for each scheduler row.
 - Show the performance loop: parity, hypothesis, implementation, benchmark,
@@ -39,6 +43,7 @@ instead of moving YAML/CSV/JSON-like manifests through the hot path.
 The robust-win gate is:
 
 - zero semantic mismatches;
+- zero reconciliation mismatches across workload spec, counts, and checksums;
 - at least `1.20x` median scheduler throughput on quick matched rows;
 - no quick scheduler row below `1.0x`;
 - Rust p99 no worse than legacy p99;
@@ -90,8 +95,8 @@ Next resource work:
 
 ## Acceptance Gates
 
-- `cargo test -p carbon-resources-core resource_catalog_` passes.
+- `cargo test --manifest-path carbon-resources-rs/Cargo.toml -p carbon-resources-core resource_catalog_` passes.
 - `cargo run -p xtask -- bench-scalability-worker data catalog-arrow-ipc-roundtrip 10 2` passes.
 - `cargo run -p xtask -- bench-scalability-worker data catalog-parquet-roundtrip 10 2` passes.
-- `scripts/render-blog-report.py` renders the scheduler regression, native
+- `scripts/render-carbon-to-rust-migration-test.py` renders the scheduler regression, native
   resource format, optimization loop, and technology-fit sections.

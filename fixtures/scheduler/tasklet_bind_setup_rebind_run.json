@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "tasklet_bind_setup_rebind_run",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_tasklet.py::TestBind::test_bind",
       "tests/python/scheduler/tests/test_tasklet.py::TestBind::test_rebind_after_run"

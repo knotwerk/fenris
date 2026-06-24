@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "nested_yield_to_blocked",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_scheduler.py::TestScheduleOrderBase::test_multi_level_nested_tasklet_run_order_with_yield_to_blocked"
     ]

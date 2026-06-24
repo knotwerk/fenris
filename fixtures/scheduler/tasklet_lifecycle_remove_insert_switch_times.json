@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "tasklet_lifecycle_remove_insert_switch_times",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_tasklet.py::TestTasklets::test_remove_and_switch",
       "tests/capiTest/Tasklet.cpp::PyTasklet_Insert"

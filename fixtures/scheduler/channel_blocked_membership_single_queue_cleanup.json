@@ -1,0 +1,172 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "channel_blocked_membership_single_queue_cleanup",
+  "source": {
+    "repo": "carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_tasklet.py::test_kill_tasklet",
+      "tests/python/scheduler/tests/test_channel.py::TestChannels::test_channel_test_clear_blocked",
+      "carbonengine/scheduler/src/Tasklet.cpp::BlockedChannel",
+      "carbonengine/scheduler/src/Channel.cpp::RemoveTaskletFromBlocked"
+    ],
+    "legacy_behavior": [
+      "A blocked tasklet belongs to exactly one channel wait queue with a matching blocked direction.",
+      "Killing or clearing a blocked tasklet removes that queue membership and repeated cleanup is a no-op."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "channels": [
+      {
+        "id": "send_queue"
+      },
+      {
+        "id": "receive_queue"
+      }
+    ],
+    "tasklets": [
+      {
+        "id": "blocked_sender",
+        "body": [
+          {
+            "op": "send",
+            "channel": "send_queue",
+            "value": "sender-payload"
+          }
+        ]
+      },
+      {
+        "id": "blocked_receiver",
+        "body": [
+          {
+            "op": "receive",
+            "channel": "receive_queue"
+          }
+        ]
+      }
+    ],
+    "entrypoint": {
+      "op": "script",
+      "steps": [
+        {
+          "op": "run_scheduler"
+        },
+        {
+          "op": "kill",
+          "tasklet": "blocked_sender"
+        },
+        {
+          "op": "kill",
+          "tasklet": "blocked_sender"
+        },
+        {
+          "op": "clear",
+          "channel": "receive_queue",
+          "pending": false
+        },
+        {
+          "op": "kill",
+          "tasklet": "blocked_receiver"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "blocked_tasklet_count": 0,
+    "blocked_channel_count": 0,
+    "active_tasklet_count": 1,
+    "all_time_tasklet_count": 3,
+    "tasklets": {
+      "blocked_sender": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "pending_exit": false
+      },
+      "blocked_receiver": {
+        "alive": false,
+        "blocked": false,
+        "scheduled": false,
+        "pending_exit": false
+      }
+    },
+    "channels": {
+      "send_queue": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      },
+      "receive_queue": {
+        "balance": 0,
+        "blocked_senders": [],
+        "blocked_receivers": []
+      }
+    }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      {
+        "kind": "channel.block",
+        "channel": "send_queue",
+        "direction": "send",
+        "blocked_senders": [
+          "blocked_sender"
+        ]
+      },
+      {
+        "kind": "channel.block",
+        "channel": "receive_queue",
+        "direction": "receive",
+        "blocked_receivers": [
+          "blocked_receiver"
+        ]
+      },
+      {
+        "kind": "tasklet.kill",
+        "tasklet": "blocked_sender",
+        "alive": false,
+        "scheduled": false
+      },
+      {
+        "kind": "tasklet.kill",
+        "tasklet": "blocked_sender",
+        "alive": false,
+        "noop": true
+      },
+      {
+        "kind": "channel.clear",
+        "channel": "receive_queue",
+        "receivers": [
+          "blocked_receiver"
+        ],
+        "senders": [],
+        "killed_tasklets": [
+          "blocked_receiver"
+        ],
+        "balance": 0
+      },
+      {
+        "kind": "tasklet.kill",
+        "tasklet": "blocked_receiver",
+        "alive": false,
+        "noop": true
+      }
+    ],
+    "match_counts": [
+      {
+        "event": {
+          "kind": "channel.block"
+        },
+        "count": 2
+      },
+      {
+        "event": {
+          "kind": "tasklet.kill"
+        },
+        "count": 3
+      }
+    ]
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "schema": "carbon-scheduler.semantic-trace.v0",
+  "name": "nested_tasklet_parent_chain",
+  "source": {
+    "repo": "carbonengine/scheduler",
+    "tests": [
+      "tests/python/scheduler/tests/test_scheduler.py::TestScheduleOrderBase::test_multi_level_nested_tasklet_run_order",
+      "carbonengine/scheduler/src/ScheduleManager.cpp::Run"
+    ],
+    "legacy_behavior": [
+      "Nested tasklet creation records parent identity so parent-chain scheduling can be reasoned about outside Greenlet objects.",
+      "The Rust core owns parent identity and nesting depth; the Python bridge still owns actual Greenlet parent switching."
+    ]
+  },
+  "check_events": false,
+  "scenario": {
+    "nested_tasklets": true,
+    "tasklets": [
+      {
+        "id": "root",
+        "body": [
+          { "op": "spawn", "tasklet": "child" },
+          { "op": "run_tasklet", "tasklet": "child" },
+          { "op": "append", "target": "completed", "value": "root" }
+        ]
+      },
+      {
+        "id": "child",
+        "initially_scheduled": false,
+        "body": [
+          { "op": "spawn", "tasklet": "grandchild" },
+          { "op": "run_tasklet", "tasklet": "grandchild" },
+          { "op": "append", "target": "completed", "value": "child" }
+        ]
+      },
+      {
+        "id": "grandchild",
+        "initially_scheduled": false,
+        "body": [
+          { "op": "append", "target": "completed", "value": "grandchild" }
+        ]
+      }
+    ],
+    "entrypoint": { "op": "run_scheduler" }
+  },
+  "trace_expect": {
+    "contains_in_order": [
+      { "kind": "tasklet.new", "actor": "main", "tasklet": "root", "parent": "main", "depth": 0 },
+      { "kind": "tasklet.new", "actor": "root", "tasklet": "child", "parent": "root", "depth": 1 },
+      { "kind": "tasklet.new", "actor": "child", "tasklet": "grandchild", "parent": "child", "depth": 2 }
+    ],
+    "match_counts": [
+      { "event": { "kind": "tasklet.new", "parent": "root" }, "count": 1 },
+      { "event": { "kind": "tasklet.new", "parent": "child" }, "count": 1 }
+    ]
+  },
+  "expect": {
+    "current": "main",
+    "run_count": 1,
+    "completed": ["grandchild", "child", "root"],
+    "tasklets": {
+      "main": { "parent": null, "depth": 0 },
+      "root": { "parent": "main", "depth": 0, "alive": false, "scheduled": false },
+      "child": { "parent": "root", "depth": 1, "alive": false, "scheduled": false },
+      "grandchild": { "parent": "child", "depth": 2, "alive": false, "scheduled": false }
+    }
+  }
+}

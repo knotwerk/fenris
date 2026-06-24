@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "scheduler_switch_trap_no_state_mutation",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_scheduler.py::TestSwitch::test_switch_trapped",
       "tests/python/scheduler/tests/test_scheduler.py::TestSwitchTrap::test_schedule",

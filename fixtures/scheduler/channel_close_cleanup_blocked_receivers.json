@@ -2,7 +2,7 @@
   "schema": "carbon-scheduler.semantic-trace.v0",
   "name": "channel_close_cleanup_blocked_receivers",
   "source": {
-    "repo": "/data/repos/fenris/carbonengine/scheduler",
+    "repo": "carbonengine/scheduler",
     "tests": [
       "tests/python/scheduler/tests/test_channel.py::TestChannels::test_kill_blocked_on_receive_on_closed",
       "tests/python/scheduler/tests/test_channel.py::TestChannels::test_raise_exception_blocked_on_receive_on_closed",

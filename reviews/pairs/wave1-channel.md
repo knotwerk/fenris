@@ -22,7 +22,7 @@ Rust target:
 - `SCH-CHANNEL-006`: cancellation-safe blocked queue removal is required.
 - `SCH-CHANNEL-007`: queue-head/order introspection is required for `PyChannel_GetQueue`.
 - `SCH-CHANNEL-008`: channel callback points should be traced before FFI execution.
-- `SCH-CHANNEL-009`: active channel registry and `unblock_all_active_channels` need core semantics.
+- `SCH-CHANNEL-009`: done; `CoreScheduler` now owns active/blocked channel counts and `unblock_all_active_channels`, with fixture-level teardown coverage for scheduler-level unblock-all.
 
 ## Required Fixtures
 

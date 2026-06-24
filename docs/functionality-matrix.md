@@ -5,11 +5,11 @@ Rust work lanes.
 
 Source of truth:
 
-- Scheduler implementation: `/data/repos/fenris/carbonengine/scheduler`
-- C API header: `/data/repos/fenris/carbonengine/scheduler/include/Scheduler.h`
+- Scheduler implementation: `carbonengine/scheduler`
+- C API header: `carbonengine/scheduler/include/Scheduler.h`
 - Python tests:
-  `/data/repos/fenris/carbonengine/scheduler/tests/python/scheduler/tests`
-- C API tests: `/data/repos/fenris/carbonengine/scheduler/tests/capiTest`
+  `carbonengine/scheduler/tests/python/scheduler/tests`
+- C API tests: `carbonengine/scheduler/tests/capiTest`
 
 Lane meanings:
 
@@ -49,8 +49,16 @@ channel payload handoff identity now uses core-owned `CorePayloadToken` values;
 the PyO3 bridge still stores the actual Python value/exception objects for
 legacy compatibility. Blocked send/receive throw and cleanup paths now resolve
 the blocked channel/direction from `CoreScheduler` snapshots and the active
-channel handle registry instead of tasklet-local channel pointers. Live PyO3
-tasklet objects also mirror
+channel handle registry instead of tasklet-local channel pointers. Covered
+blocked send/receive tasklet state projection now applies `CoreScheduler`
+snapshots instead of hand-writing bridge-local lifecycle flags. Covered live
+channel-continuation scheduled/paused projection also applies `CoreScheduler`
+snapshots instead of bridge-local lifecycle flags. Covered current-tasklet
+channel handoff requeue projection now also reads the scheduled/alive/paused
+state back from `CoreScheduler` after the core queue operation. Covered
+`scheduler.schedule_remove()` pause projection now also pauses through
+`CoreScheduler` and projects the resulting tasklet snapshot back to the bridge.
+Live PyO3 tasklet objects also mirror
 alive/scheduled/paused/times_switched_to through `CoreScheduler` tasklet
 snapshots for the setup/run/finish/block/continuation/clear/kill paths covered
 by bridge tests, use core pause/resume transitions for bind/remove/insert and
@@ -61,8 +69,8 @@ callable execution, and Python scheduler switch-trap entrypoints plus trapped
 operation guards now use CoreScheduler per-run-queue state. Python runtime sync
 no longer writes the core scheduled flag; Python-visible tasklet
 alive/blocked/scheduled/paused/block_trap/times_switched_to properties and the
-public tasklet call/setup/insert/run/switch invalid-state guards,
-current-tasklet block-trap guard used by channel operations, and C API
+public tasklet call/setup/insert/run/switch/bind/unbind/dont_raise invalid-state
+guards, current-tasklet block-trap guard used by channel operations, and C API
 times-switched/block-trap getters now read CoreScheduler snapshots, including
 the legacy transient current-tasklet scheduled flag during
 `scheduler.schedule()`. The public insert path no longer resyncs stale
@@ -136,14 +144,14 @@ covered claim.
 | channel errors | `PyChannel_SendException`, `PyChannel_SendThrow` | Model typed error payloads as channel messages once value transfer is green. | Emit exception-transfer events with symbolic error names and args. | Preserve Python exception type/value/traceback behavior. | Full traceback preservation, `sys.exc_info()`, pending kill interactions with completed transfers. |
 | channel queues | `PyChannel_GetQueue` | Expose blocked queue head/order in core introspection. | Add queue snapshots for blocked sender/receiver order fixtures. | Return the exact blocked `PyTaskletObject*`. | Public iterator protocol and Python `QueueChannel` wrapper semantics. |
 | scheduler control | `PyScheduler_Schedule`, `PyScheduler_GetRunCount`, `PyScheduler_GetCurrent`, `PyScheduler_RunWithTimeout`, `PyScheduler_RunNTasklets`, `PyScheduler_GetScheduler` | Implement deterministic run queue, current tasklet, `schedule`, `schedule_remove`, full run, limited run, run-count semantics including main tasklet, deadlock detection, CoreScheduler-owned per-run-queue switch-trap level and no-mutation guards, and wall-clock `RunWithTimeout` pumping that always runs at least one queued tasklet for zero/expired timeouts. | Emit `scheduler.run.start`, `scheduler.switch`, `scheduler.schedule`, `scheduler.schedule_remove`, `scheduler.switch_trap`, `scheduler.switch_trap_error`, `scheduler.deadlock`, and final run counters. | Expose the capsule functions and Python `scheduler` object. | Callback reentrancy, advanced Greenlet exception paths, public Python API edge cases. |
-| scheduler callbacks | `PyScheduler_SetChannelCallback`, `PyScheduler_GetChannelCallback`, `PyScheduler_SetScheduleCallback`, `PyScheduler_SetScheduleFastCallback` | Invoke Python schedule callbacks, share schedule callbacks across threads, and invoke the fast C schedule callback at switch points covered by bridge parity tests. | Emit callback-point events when useful for parity fixtures and invoke user callbacks in the Python bridge. | Python-level callback set/get storage, schedule callback basic ordering, multi-thread callback visibility, simple channel callback order, and fast C callback smoke are covered. | Callback exceptions, callback reentrancy, broader lifetime/refcount cleanup. |
-| scheduler counters | `PyScheduler_GetNumberOfActiveScheduleManagers`, `PyScheduler_GetNumberOfActiveChannels`, `PyScheduler_GetAllTimeTaskletCount`, `PyScheduler_GetActiveTaskletCount`, `PyScheduler_GetTaskletsCompletedLastRunWithTimeout`, `PyScheduler_GetTaskletsSwitchedLastRunWithTimeout` | Track active channel count, active/all-time tasklet count, completed count, and switch count. One schedule manager per core instance. | Include final counter assertions in fixtures where relevant. | Export exact integer-returning C API. | Python GC timing and schedule-manager reference cleanup. |
+| scheduler callbacks | `PyScheduler_SetChannelCallback`, `PyScheduler_GetChannelCallback`, `PyScheduler_SetScheduleCallback`, `PyScheduler_SetScheduleFastCallback` | Invoke Python schedule callbacks, share schedule callbacks across threads, and invoke the fast C schedule callback at switch points covered by bridge parity tests. | `fixtures/scheduler/scheduler_callback_switch_points.json` emits ordered scheduler callback-point trace events with previous/next tasklet identity and switch reason; user callback invocation remains in the Python bridge. | Python-level callback set/get storage, schedule callback basic ordering, multi-thread visibility, simple channel callback order, and fast C callback smoke are covered. | Callback exceptions, callback reentrancy, broader lifetime/refcount cleanup. |
+| scheduler counters | `PyScheduler_GetNumberOfActiveScheduleManagers`, `PyScheduler_GetNumberOfActiveChannels`, `PyScheduler_GetAllTimeTaskletCount`, `PyScheduler_GetActiveTaskletCount`, `PyScheduler_GetTaskletsCompletedLastRunWithTimeout`, `PyScheduler_GetTaskletsSwitchedLastRunWithTimeout` | Track active channel count, active/all-time tasklet count, completed count, and switch count. One schedule manager per core instance. | Include final counter assertions in fixtures where relevant. | Export exact integer-returning C API; `schedule_manager_wrapper_lifecycle_matches_legacy_thread_cache` covers cached manager identity, weakrefs, `sys.getrefcount(... ) == 2`, and active-manager teardown across a thread. | Broader Python GC timing outside the covered schedule-manager wrapper path. |
 
 ## Legacy Support File Parity Notes
 
 | Support source | Public behavior affected | Rust guard |
 | --- | --- | --- |
-| `Utils.cpp`/`Utils.h::StdStringFromPyObject` | `tasklet.context` and `tasklet.parent_callsite` accept only Python `str`, store UTF-8 text, and reject non-strings with `TypeError("value must be a string")`. `Tasklet::SetCallsiteData` also uses the helper internally for method/module/file metrics after coercing `__name__` and `__module__` through `str()`. | `crates/carbon-scheduler-python/src/lib.rs::tasklet_getset_properties_match_legacy_py_tasklet_surface` checks metric extraction, string round-trips, and exact non-string setter error text. |
+| `Utils.cpp`/`Utils.h::StdStringFromPyObject` | `tasklet.context` and `tasklet.parent_callsite` accept only Python `str`, store UTF-8 text, and reject non-strings with `TypeError("value must be a string")`. `Tasklet::SetCallsiteData` also uses the helper internally for method/module/file metrics after coercing `__name__` and `__module__` through `str()`. | `carbon-scheduler-rs/crates/carbon-scheduler-python/src/lib.rs::tasklet_getset_properties_match_legacy_py_tasklet_surface` checks metric extraction, string round-trips, and exact non-string setter error text. |
 | `GILRAII.cpp`/`GILRAII.h` | Legacy C API capsule entries always reacquire/release the GIL before touching Python objects. This is not a standalone Python feature, but it is visible as safe C API calls for tasklet/channel/scheduler operations. | Rust C API entries that dereference Python objects use `Python::with_gil`; pure counter/fast-callback slots avoid Python object access. The C API parity tests named `c_api_*_match_legacy_*` exercise the Python-object entries through the capsule. |
 | `PythonCppType.cpp`/`PythonCppType.h` | Internal holder for the wrapper `PyObject*`; public effects are object identity and explicit `Incref`/`Decref` use behind `PyTasklet_Setup`, `PyTasklet_Kill`, `PyScheduler_GetCurrent`, `PyScheduler_GetScheduler`, queue heads, and active tasklet/channel lifetime counters. | Guarded by `c_api_tasklet_setup_reference_counts_match_legacy_capi_test`, `c_api_scheduler_identity_run_count_and_run_n_tasklets_match_legacy_capi_paths`, `c_api_channel_constructor_introspection_entries_match_legacy_capi_paths`, `active_channel_count_matches_legacy_teardown_and_capi_refcounts`, `tasklet_resource_counters_match_legacy_capi_lifetime`, and `schedule_manager_wrapper_lifecycle_matches_legacy_thread_cache`. No separate Rust type is needed. |
 
@@ -171,7 +179,7 @@ covered claim.
 | `test_tasklet.py::test_invalid_tasklet_when_skipping_init`, `test_invalid_tasklet_when_skipping_new`, `test_weakref_in_tasklet_new`, cyclic cleanup tests, `TestBind*`, metrics tests | core/ffi split | `fixtures/scheduler/tasklet_bind_setup_rebind_run.json`, `fixtures/scheduler/tasklet_unbind_paused.json`, plus Rust PyO3 bridge unit tests/unchanged subset | Core now guards bind(args), setup enqueue, rebind after run, unbind of a paused tasklet, explicit pause/resume state, and times_switched_to reset. Python type/lifetime, weakref/GC, metrics, and exact error paths stay in the bridge tests. |
 | `test_tasklet.py::*_from_another_thread`, `test_new_tasklets_cleanup_on_thread_finish`, `test_partially_complete_tasklets_cleanup_on_thread_finish` | deferred | none initially | Thread ownership and cross-thread safety are out of first milestone scope. |
 | `test_scheduler.py::test_schedule`, `test_schedule_remove_fail`, `TestRun::test_calling_run_from_non_main_tasklet`, `TestSwitch::*`, `TestSwitchTrap::*` | core then ffi/deferred | `fixtures/scheduler/nested_tasklet_schedule_order.json`, `fixtures/scheduler/nested_tasklet_schedule_order_no_nested.json`, `fixtures/scheduler/scheduler_schedule_back_reschedule_order.json`, `fixtures/scheduler/schedule_remove_reinsert_paused_tasklet.json`, `fixtures/scheduler/scheduler_switch_trap_no_state_mutation.json` | Schedule order, `scheduler.schedule()` BACK requeue, schedule-remove pause/reinsert, and scheduler switch-trap no-mutation behavior are covered in core; non-main `scheduler.run()` and Python exception object/text details remain bridge coverage. |
-| `test_scheduler.py::test_set_schedule_callback`, `test_schedule_callback_basic`, `test_schedule_callback_with_multiple_threads`, `TestCAPIExposure::test_has_capi_attribute` | ffi/partial | trace optional | `_C_API` exposure, callback get/set, schedule callback basic ordering, multi-thread visibility, and fast C callback smoke now pass; callback exception/reentrancy behavior remains open. |
+| `test_scheduler.py::test_set_schedule_callback`, `test_schedule_callback_basic`, `test_schedule_callback_with_multiple_threads`, `TestCAPIExposure::test_has_capi_attribute`, `test_utils.py::SchedulerTestCaseBase.tearDown` schedule-manager checks | core then ffi/partial | `fixtures/scheduler/scheduler_callback_switch_points.json` plus bridge tests | `_C_API` exposure, callback get/set, schedule callback previous/next switch-point identity, schedule callback basic ordering, multi-thread visibility, fast C callback smoke, and schedule-manager refcount/active-manager teardown now pass; callback exception/reentrancy behavior remains open. |
 
 ## C API Test Mapping
 
@@ -193,15 +201,16 @@ covered claim.
 ## Scheduler Fixture Corpus
 
 The scheduler fixture corpus lives in `fixtures/scheduler/`. It currently has
-56 JSON fixtures: 40 with exact ordered event expectations, 56 with final-state
-checks, 12 with trace-expectation checks, and one fixture-level teardown cleanup
+58 JSON fixtures: 40 with exact ordered event expectations, 58 with final-state
+checks, 14 with trace-expectation checks, and one fixture-level teardown cleanup
 check. The latest promoted fixtures cover `scheduler.schedule()` BACK requeue
 ordering, the non-nested `tasklet.run()` FRONT_PLUS_ONE boundary,
 `TestWithLimit`-style repeated `run_n_tasklets(1)` for single-level and
 multi-level schedule order with nested tasklets enabled and disabled, plus
 blocked/dead direct tasklet run/switch rejection without queue or channel
 mutation and switch-trap operation rejection without mutating
-schedule/schedule_remove events. All run
+schedule/schedule_remove events. The corpus also covers a nested parent/depth
+tasklet chain from root to child to grandchild. All run
 trace-gate invariant checks for event sequence order, event-level
 `run_count`/`calculated_run_count` consistency, runnable snapshot length
 consistency, tasklet-count consistency, blocked tasklet/channel counts, blocked
@@ -209,6 +218,8 @@ tasklet state, channel balance, queue-front consistency, and channel/tasklet
 blocked-queue cross-links. Trace-expectation fixtures also assert ordered
 partial events and exact event match counts for bounded pump, invalid
 operation, BACK requeue, FRONT_PLUS_ONE, and switch-trap operation boundaries.
+The nested parent-chain fixture checks parent/depth metadata in both trace
+events and final scheduler state.
 These fixtures
 intentionally avoid Python object references. Values are encoded as JSON
 primitives or tagged objects, tasklets are stable names, and channels are stable
@@ -231,17 +242,24 @@ architecture. The same-Python-API bridge rows are the parity lane: they measure
 the legacy surface and expose Python/Greenlet/PyO3 overhead while the port is
 being proven. A separate native Rust scheduler lane is required for the final
 architecture: Rust-owned tasklets, channels, wakeups, domains, and budgets with
-no Python objects, Greenlets, or refcounts in the hot path. That no-Python lane
-is a valid benchmark architecture change, even though it is not a same-API
-legacy comparison. Rayon, SIMD, bitsets, and vectorized data layouts belong only
-after that native lane has a scalar Rust baseline or a dense game-workload
-kernel to optimize.
+no Python objects, Greenlets, or refcounts in the hot path.
+`bench-scheduler-architecture` now records that architecture test directly:
+native runnable-drain and channel-rendezvous rows are joined to same-pressure
+Rust bridge rows from `scheduler-comparison.json`, while larger native
+queue/domain probes stay as capacity-shape observations. It also records
+Rust-owned fanout-pipeline and zone-tick-study rows that keep scheduler wakeups,
+channel handoffs, worker accounting, entity updates, and aggregation in Rust.
+That no-Python lane is a valid benchmark architecture change, even though it is
+not a same-API legacy comparison. Rayon, SIMD, bitsets, and vectorized data
+layouts belong only after that native lane has a scalar Rust baseline or a dense
+game-workload kernel to optimize.
 
-`bench-scalability` now includes that no-Python lane through
+`bench-scalability` still includes that no-Python lane through
 `--families native-scheduler`. The current release-native, target-cpu-native
-quick matrix records four native scheduler rows in `scalability-matrix.json`:
-runnable drain at 1,024 and 16,384 tasklets, channel rendezvous at 1,024 pairs,
-and domain-style wakeups at 4,096 wakeups. These rows are explicitly marked
+quick matrix records seven native scheduler rows: runnable drain at 128, 1,024,
+and 16,384 tasklets, channel rendezvous at 32, 256, and 1,024 pairs, and
+domain-style wakeups at 4,096 wakeups, plus Rust-owned fanout and zone-tick
+tasklet-work rows. These rows are explicitly marked
 `rust_native_no_python_architecture_probe_not_legacy_api_comparable` and
 `no_python_hot_path=true`; they measure target-architecture upside, not legacy
 API parity.
